@@ -186,3 +186,58 @@ test('/clauderouter options: engine and keep-warm', () => {
   expect(applyArgs('warm off', { engine: 'rules', warmUntil: 5 }, 0).next?.warmUntil).toBe(0)
   expect(applyArgs('warm soon', DEFAULT_OPTIONS, 0).next).toBe(null)
 })
+
+// Keep-warm on the mock clock: the ping goes out after 50 idle minutes, and a failed one closes the window
+async function warmWorld($: any, on: On, answers: boolean[]) {
+  const clock = world(on)
+  let forks = 0
+  on('model.fork', () => {
+    forks += 1
+    const ok = answers.shift() ?? true
+    return { value: ok
+      ? { isAnswered: true as const, text: 'warm', usage: { input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 200000, cache_creation_input_tokens: 0 } }
+      : { isAnswered: false as const, reason: 'api-error' as const, status: 500 } }
+  })
+  on('turn.step', async function* (_$, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'clauderouter', args: 'warm 3h', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  await $.turn.start({ turnId: 't1', text: 'list the files' })
+  for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-sonnet-5-5', effort: 'low', messageCount: 1 })) { /* drain */ }
+  await $.turn.complete({ turnId: 't1', reason: 'answer', isAborted: false, durationMs: 300, answer: '' })
+  return { clock, forks: () => forks }
+}
+
+const MIN = 60_000
+// advance() refuses a jump of more than 10000 timer waits, and the 100 ms frame timer fires all the while: go in 10-minute steps
+async function idle(clock: { advance: (ms: number) => Promise<void> }, minutes: number) {
+  for (let left = minutes; left > 0; left -= 10) await clock.advance(Math.min(left, 10) * MIN)
+}
+
+test('keep-warm pings the cache after 50 idle minutes, then every 50 more', { timeoutMs: 120_000 }, async ($, on) => {
+  const { clock, forks } = await warmWorld($, on, [])
+  await idle(clock, 40)
+  expect(forks()).toBe(0)
+  await idle(clock, 11)
+  expect(forks()).toBe(1)
+  await idle(clock, 30)
+  expect(forks()).toBe(1)
+  await idle(clock, 21)
+  expect(forks()).toBe(2)
+})
+
+test('a failed ping closes the keep-warm window', { timeoutMs: 120_000 }, async ($, on) => {
+  const { clock, forks } = await warmWorld($, on, [false])
+  await idle(clock, 51)
+  expect(forks()).toBe(1)
+  await idle(clock, 120)
+  expect(forks()).toBe(1)
+})
+
+test('keep-warm off sends no ping', { timeoutMs: 120_000 }, async ($, on) => {
+  const { clock, forks } = await warmWorld($, on, [])
+  await $.command.run({ command: 'clauderouter', args: 'warm off', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  await idle(clock, 120)
+  expect(forks()).toBe(0)
+})

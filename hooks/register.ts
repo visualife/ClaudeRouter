@@ -30,7 +30,7 @@ let turnId = ''
 let turnText = ''
 let turnTools: string[] = []
 // When the main thread last sent a request, for keep-warm
-let lastRequestAt = 0
+let lastRequestAt: number | null = null
 const subagents = new Map<string, { text: string; subagentType?: string }>()
 // The Rasters each drawn site mounted that shimmer or move: what the timer repaints with $.ui.blit
 const mounted = new Map<string, Anim[]>()
@@ -86,7 +86,7 @@ export const register: Register = on => {
     $.clock.every(60_000, async () => {
       const now = await $.clock.now()
       const { warmUntil } = await read($, options)
-      if (warmUntil <= now || busy || lastRequestAt === 0 || now - lastRequestAt < WARM_EVERY_MS) return
+      if (warmUntil <= now || busy || lastRequestAt === null || now - lastRequestAt < WARM_EVERY_MS) return
       const reply = await $.model.fork({ prompt: 'Reply with the single word: warm' }).catch(() => null)
       // A failed ping ends the window: the cache is probably gone, and retrying would only pay to write it again
       if (!reply || !reply.isAnswered) await update($, options, o => ({ ...o, warmUntil: 0 }))
