@@ -1,6 +1,8 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
+import { askJev } from '../hooks/jev'
+import { applyArgs, DEFAULT_OPTIONS } from '../hooks/options'
 import { pickRoute, roleOf } from '../hooks/route'
 
 const PLUGIN = 'agent-ClaudeRouter'
@@ -158,4 +160,29 @@ test('hysteresis keeps the current model on a tie, but not on a clear win', () =
   expect(pickRoute({ text: 'why list', tools: [], current: 'opus' }).model).toBe('opus')
   // a clear sonnet win does not hold the old model
   expect(pickRoute({ text: 'fix the login bug in the form', tools: [], current: 'opus' }).model).toBe('sonnet')
+})
+
+const ok = (body: unknown) => async () => ({ ok: true, text: JSON.stringify(body) })
+const INPUT = { text: 'debug the race in the token refresh', tools: [] }
+
+test('Jev picks a tier from the Choice answer', async () => {
+  const pick = await askJev(ok({ answers: { route: { choice: 'opus', probabilities: { opus: 0.82 } } } }), 'k', INPUT)
+  expect(pick).toEqual({ model: 'opus', conf: 0.82 })
+})
+
+test('Jev failures all return null so the rules take over', async () => {
+  expect(await askJev(async () => ({ ok: false, text: '' }), 'k', INPUT)).toBe(null)
+  expect(await askJev(async () => { throw new Error('offline') }, 'k', INPUT)).toBe(null)
+  expect(await askJev(ok({ answers: { route: { choice: 'gpt', probabilities: {} } } }), 'k', INPUT)).toBe(null)
+  expect(await askJev(async () => ({ ok: true, text: 'not json' }), 'k', INPUT)).toBe(null)
+})
+
+test('/clauderouter options: engine and keep-warm', () => {
+  const jev = applyArgs('engine jev', DEFAULT_OPTIONS, 0)
+  expect(jev.next?.engine).toBe('jev')
+  expect(applyArgs('engine gpt', DEFAULT_OPTIONS, 0).next).toBe(null)
+  expect(applyArgs('warm 90m', DEFAULT_OPTIONS, 1000).next?.warmUntil).toBe(1000 + 90 * 60_000)
+  expect(applyArgs('warm 99h', DEFAULT_OPTIONS, 0).next?.warmUntil).toBe(6 * 3_600_000)
+  expect(applyArgs('warm off', { engine: 'rules', warmUntil: 5 }, 0).next?.warmUntil).toBe(0)
+  expect(applyArgs('warm soon', DEFAULT_OPTIONS, 0).next).toBe(null)
 })

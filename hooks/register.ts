@@ -1,10 +1,12 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { Agent, Route, Task } from '../types'
+import { JEV_TIMEOUT_MS, askJev } from './jev'
+import { DEFAULT_OPTIONS, WARM_EVERY_MS, applyArgs } from './options'
 import { type Els, type Snapshot, drawBand } from './band'
 import { drawPane } from './pane'
 import { type Anim, animCells } from './pixel'
-import { familyOf, idFor, pickRoute, roleOf, whyOf } from './route'
+import { effortFor, familyOf, idFor, pickRoute, roleOf, whyOf } from './route'
 import { attachAgent, addPlugin, bumpMcp, bumpSkill, nameOf, patchAgent, patchTask, toUsage } from './lists'
 
 const PANE = 'agent-ClaudeRouter'
@@ -17,6 +19,7 @@ const skills = atom({ plugin: 'agent-ClaudeRouter', key: 'skills' } as const, []
 const mcp = atom({ plugin: 'agent-ClaudeRouter', key: 'mcp' } as const, [])
 const plugins = atom({ plugin: 'agent-ClaudeRouter', key: 'plugins' } as const, [])
 const usage = atom({ plugin: 'agent-ClaudeRouter', key: 'usage' } as const, null)
+const options = atom({ plugin: 'agent-ClaudeRouter', key: 'options' } as const, DEFAULT_OPTIONS)
 const totals = atom({ plugin: 'agent-ClaudeRouter', key: 'totals' } as const, { tokens: 0, turns: 0 })
 
 // Shared by the hooks below. A reload starts them over; $.state keeps what the band shows.
@@ -26,6 +29,8 @@ let terminal = false
 let turnId = ''
 let turnText = ''
 let turnTools: string[] = []
+// When the main thread last sent a request, for keep-warm
+let lastRequestAt = 0
 const subagents = new Map<string, { text: string; subagentType?: string }>()
 // The Rasters each drawn site mounted that shimmer or move: what the timer repaints with $.ui.blit
 const mounted = new Map<string, Anim[]>()
@@ -77,11 +82,27 @@ export const register: Register = on => {
       // The seconds counters are Text, which a blit does not reach: redraw once a second
       if (frame % 10 === 0) $.ui.invalidate('ui.render')
     })
+    // Keep-warm: once a minute, ping the cache if the window is open and the main thread has been idle for 50 min
+    $.clock.every(60_000, async () => {
+      const now = await $.clock.now()
+      const { warmUntil } = await read($, options)
+      if (warmUntil <= now || busy || lastRequestAt === 0 || now - lastRequestAt < WARM_EVERY_MS) return
+      const reply = await $.model.fork({ prompt: 'Reply with the single word: warm' }).catch(() => null)
+      // A failed ping ends the window: the cache is probably gone, and retrying would only pay to write it again
+      if (!reply || !reply.isAnswered) await update($, options, o => ({ ...o, warmUntil: 0 }))
+      else lastRequestAt = now
+    })
     return next(e)
   })
 
   // Runs when you type /ClaudeRouter. Opening the pane draws nothing by itself; ui.render fills it.
-  on('command.run', { command: 'clauderouter' }, async $ => {
+  on('command.run', { command: 'clauderouter' }, async ($, e) => {
+    if (e.args.trim()) {
+      const now = await $.clock.now()
+      const { next, text } = applyArgs(e.args, await read($, options), now)
+      if (next) await update($, options, () => next)
+      return { text }
+    }
     await $.ui.open({ id: PANE, title: 'ClaudeRouter', closeOnEscape: true })
     return {}
   })
@@ -117,7 +138,18 @@ export const register: Register = on => {
       subagentType: sub?.subagentType,
       current: familyOf(e.model),
     }
-    const pick = pickRoute(input)
+    let pick = pickRoute(input)
+    let by: Route['by'] = 'rules'
+    if (!e.agentId) lastRequestAt = await $.clock.now()
+    if ((await read($, options)).engine === 'jev') {
+      const key = await $.env.get('TYPESAFE_API_KEY')
+      const timeout = new Promise<null>(resolve => { $.clock.after(JEV_TIMEOUT_MS, () => resolve(null)) })
+      const jev = key ? await Promise.race([askJev((url, init) => $.http.fetch(url, init), key, input), timeout]) : null
+      if (jev) {
+        pick = { model: jev.model, conf: jev.conf, effort: effortFor(jev.model, input.text, input.subagentType) }
+        by = 'jev'
+      }
+    }
     const kept = familyOf(e.model) === pick.model
     const result = yield* next({ ...e, model: idFor(pick.model, e.model), effort: pick.effort })
 
@@ -126,9 +158,10 @@ export const register: Register = on => {
       effort: pick.effort,
       conf: pick.conf,
       kept,
+      by,
       engineModel: e.model,
       source: e.agentId ? 'subagent' : 'main',
-      why: whyOf(input),
+      why: (by === 'jev' ? 'jev · ' : '') + whyOf(input),
     }
     await update($, route, () => decided)
     if (e.agentId) {

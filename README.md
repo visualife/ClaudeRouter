@@ -9,6 +9,8 @@ A Claude Code mod that picks the **model and effort for each request**, and keep
 - **Routes every request** to `haiku`, `sonnet` or `opus` with a reasoning effort (`low` → `xhigh`) and a confidence score. Routing is local keyword/length/tool heuristics: no model is called to decide. A small hysteresis stops it flip-flopping between tiers.
 - **Live band above the prompt**: current route, running agents, skills used, MCP calls, plugins seen, context window, and 5h / 7d plan usage.
 - **`/clauderouter` pane**: cost, tokens and elapsed time cards, plus the running and finished subagents with the model and effort each one got.
+- **Jev as the router (optional)**: let [Jev](https://typesafe.ai) (TypeSafe System One) pick the tier instead of the keyword rules. Falls back to the rules on any error or timeout.
+- **Keep the cache warm (optional)**: pings the prompt cache every 50 minutes while you are idle, so a break does not cost a full re-write.
 - **Pixel mascots** per subagent role: scout (Explore), planner (Plan), researcher, builder.
 
 ## Requirements
@@ -40,6 +42,22 @@ A Claude Code mod that picks the **model and effort for each request**, and keep
 - **Band**: shows automatically. It updates on every prompt with the picked model, effort and confidence, and tells you when it switched model.
 - **Pane**: type `/clauderouter` to open it. Press `Esc` to close.
 - **Subagents**: each one appears in the pane's *Running* and *Finished* lists with its own model and effort.
+
+## Options
+
+Set them from the prompt; they persist across reloads.
+
+| Command | Effect |
+|---|---|
+| `/clauderouter engine jev` | Jev picks haiku / sonnet / opus. Needs `TYPESAFE_API_KEY` in the environment. |
+| `/clauderouter engine rules` | Local keyword rules (default). |
+| `/clauderouter warm 2h` | Keep the prompt cache warm for 2h (default 2h, max 6h). |
+| `/clauderouter warm off` | Stop. |
+| `/clauderouter status` | Show the current options. |
+
+**Jev**: it only chooses the tier; Claude still does the work. Each routed request sends the prompt text (first 4000 characters) to `api.typesafe.ai` and costs one small Jev call (about 0.3 s). A pick made by Jev shows `jev ·` at the start of the band's second line. With no key, an error or a 2.5 s timeout, the rules decide, so nothing blocks.
+
+**Keep warm**: each ping is a short model call on the existing conversation (cache reads, cheap). It only runs while the window is open and no turn is running, and it ends the window if a ping fails, since the cache is then probably gone. Switching model tiers loses the cache of the previous tier, which is what this is for. If you already run the `cache-tax` mod's `/keepwarm`, use one of the two, not both.
 
 ## Update / uninstall
 

@@ -2,6 +2,11 @@
 
 export type Model = 'haiku' | 'sonnet' | 'opus'
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh'
+// Who picks the tier: the local keyword rules, or Jev (falls back to the rules when it is unreachable)
+export type Engine = 'rules' | 'jev'
+
+// The user's switches, set with /clauderouter. warmUntil is a clock time in ms; 0 means keep-warm is off.
+export type Options = { engine: Engine; warmUntil: number }
 
 // The latest routing decision, for the main conversation or one subagent request
 export type Route = {
@@ -9,6 +14,8 @@ export type Route = {
   effort: Effort
   conf: number
   kept: boolean
+  // Who made the pick; 'rules' also when Jev was asked and failed
+  by: Engine
   engineModel: string
   source: 'main' | 'subagent'
   // The signals it was picked on, for the band's second line
@@ -63,6 +70,7 @@ declare module 'claude-code' {
       mcp: McpUse[]
       plugins: string[]
       usage: Usage | null
+      options: Options
       totals: { tokens: number; turns: number }
     }
   }

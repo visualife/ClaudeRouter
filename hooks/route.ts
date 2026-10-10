@@ -76,6 +76,13 @@ export function pickRoute(input: RouteInput): RoutePick {
   return { model, effort, conf: Math.round(conf * 100) / 100 }
 }
 
+// The effort for a tier chosen by something other than pickRoute (Jev): the same ladder, without the scores
+export function effortFor(model: Model, text: string, subagentType?: string): Effort {
+  if (model === 'haiku') return 'low'
+  if (model === 'sonnet') return 'medium'
+  return DEEP.test(text) || subagentType === 'Plan' ? 'xhigh' : 'high'
+}
+
 // The signals behind a pick, as the band's dim second line: “excerpt” · kw:debug · len 212 · tools Bash·Edit
 export function whyOf(input: RouteInput): string {
   const kw = (input.text.match(HEAVY) ?? input.text.match(MID) ?? input.text.match(LIGHT) ?? [])[0]?.toLowerCase()
