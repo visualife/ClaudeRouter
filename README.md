@@ -11,20 +11,50 @@ A Claude Code mod that picks the **model and effort for each request**, and keep
 - **`/clauderouter` pane**: cost, tokens and elapsed time cards, plus the running and finished subagents with the model and effort each one got.
 - **Pixel mascots** per subagent role: scout (Explore), planner (Plan), researcher, builder.
 
+## Requirements
+
+- A Claude Code build that supports mods (plugins that ship `hooks/*.ts` modules and a `types` entry).
+- Git, to clone the repo.
+
 ## Install
 
+1. Clone the repo anywhere on your machine:
+
+   ```bash
+   git clone https://github.com/visualife/ClaudeRouter
+   ```
+
+2. In Claude Code, add the clone as a local marketplace and install the plugin:
+
+   ```
+   /plugin marketplace add ./ClaudeRouter
+   /plugin install agent-ClaudeRouter@router-mods
+   ```
+
+   Use the full path to the clone if it is not in the directory you launched Claude Code from.
+
+3. Reload plugins (`/reload-plugins`) or restart Claude Code. The band appears above the prompt.
+
+## Usage
+
+- **Band**: shows automatically. It updates on every prompt with the picked model, effort and confidence, and tells you when it switched model.
+- **Pane**: type `/clauderouter` to open it. Press `Esc` to close.
+- **Subagents**: each one appears in the pane's *Running* and *Finished* lists with its own model and effort.
+
+## Update / uninstall
+
 ```bash
-git clone https://github.com/visualife/ClaudeRouter
+git -C ClaudeRouter pull
 ```
 
-Then add it as a local marketplace in Claude Code and install the plugin:
-
 ```
-/plugin marketplace add ./ClaudeRouter
-/plugin install agent-ClaudeRouter@router-mods
+/plugin uninstall agent-ClaudeRouter@router-mods
+/plugin marketplace remove router-mods
 ```
 
-Open the pane with `/clauderouter`.
+## Tuning
+
+Routing lives in `hooks/route.ts`: edit the `HEAVY`, `MID` and `LIGHT` keyword lists, or `HYSTERESIS`, to change how eagerly it moves between tiers.
 
 ## Layout
 
