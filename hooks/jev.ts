@@ -12,7 +12,10 @@ export type JevFetch = (
   init: { method: string; headers: Record<string, string>; body: string },
 ) => Promise<{ ok: boolean; text: string }>
 
-export type JevPick = { model: Model; conf: number }
+// jev-1.13: 64k tokens per request (docs.typesafe.ai/models)
+export const JEV_WINDOW = 64_000
+
+export type JevPick = { model: Model; conf: number; input: number; output: number }
 
 export function jevBody(input: RouteInput) {
   return {
@@ -44,11 +47,19 @@ export async function askJev(fetch: JevFetch, key: string, input: RouteInput): P
       body: JSON.stringify(jevBody(input)),
     })
     if (!res.ok) return null
-    const answer = JSON.parse(res.text)?.answers?.route
+    const body = JSON.parse(res.text)
+    const answer = body?.answers?.route
     const model = TIERS.find(t => t === answer?.choice)
     const p = answer?.probabilities?.[model ?? '']
     if (!model || typeof p !== 'number' || !Number.isFinite(p)) return null
-    return { model, conf: Math.round(Math.min(0.99, Math.max(0.5, p)) * 100) / 100 }
+    const inTok = Number(body?.usage?.input_tokens)
+    const outTok = Number(body?.usage?.output_tokens)
+    return {
+      model,
+      conf: Math.round(Math.min(0.99, Math.max(0.5, p)) * 100) / 100,
+      input: Number.isFinite(inTok) ? inTok : 0,
+      output: Number.isFinite(outTok) ? outTok : 0,
+    }
   } catch {
     return null
   }

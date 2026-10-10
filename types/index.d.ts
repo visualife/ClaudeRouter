@@ -51,6 +51,9 @@ export type Task = {
   agents: Agent[]
 }
 
+// What Jev has cost this session: calls made, and the last call's tokens against its 64k window
+export type JevUse = { calls: number; input: number; output: number }
+
 export type SkillUse = { name: string; uses: number }
 export type McpUse = { server: string; tool: string; calls: number }
 
@@ -71,6 +74,7 @@ declare module 'claude-code' {
       plugins: string[]
       usage: Usage | null
       options: Options
+      jev: JevUse | null
       totals: { tokens: number; turns: number }
     }
   }

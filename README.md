@@ -55,7 +55,7 @@ Set them from the prompt; they persist across reloads.
 | `/clauderouter warm off` | Stop. |
 | `/clauderouter status` | Show the current options. |
 
-**Jev**: it only chooses the tier; Claude still does the work. Each routed request sends the prompt text (first 4000 characters) to `api.typesafe.ai` and costs one small Jev call (about 0.3 s). A pick made by Jev shows `jev ·` at the start of the band's second line. With no key, an error or a 2.5 s timeout, the rules decide, so nothing blocks.
+**Jev**: it only chooses the tier; Claude still does the work. Each routed request sends the prompt text (first 4000 characters) to `api.typesafe.ai` and costs one small Jev call (about 0.3 s). In the band, `jev` sits beside `haiku sonnet opus` on the Model route row: lit when Jev made the pick, dim when the rules did. Once Jev has been used, a `Jev · context` bar appears: the last call's input tokens against Jev's 64k per-request window, with the call count. A Jev pick also starts the band's second line with `jev ·`. With no key, an error or a 2.5 s timeout, the rules decide, so nothing blocks.
 
 **Keep warm**: each ping is a short model call on the existing conversation (cache reads, cheap). It only runs while the window is open and no turn is running, and it ends the window if a ping fails, since the cache is then probably gone. Switching model tiers loses the cache of the previous tier, which is what this is for. If you already run the `cache-tax` mod's `/keepwarm`, use one of the two, not both.
 

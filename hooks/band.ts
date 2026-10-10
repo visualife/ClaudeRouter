@@ -1,5 +1,6 @@
 import type { Elements, RenderElement } from 'claude-code'
-import type { McpUse, Route, SkillUse, Task, Usage } from '../types'
+import type { JevUse, McpUse, Route, SkillUse, Task, Usage } from '../types'
+import { JEV_WINDOW } from './jev'
 import { familyOf } from './route'
 import { ACCENT, type Anim, type Role, type Tone, barCells, packCells, spriteCells, SPRITE_COLUMNS, SPRITE_ROWS } from './pixel'
 import { fmtFit, fmtPct, fmtTime, fmtTokens } from './format'
@@ -15,6 +16,7 @@ export type Snapshot = {
   mcp: McpUse[]
   plugins: string[]
   usage: Usage | null
+  jev: JevUse | null
   totals: { tokens: number; turns: number }
   now: number
   frame: number
@@ -102,6 +104,8 @@ function routeRows(els: Els, r: Route): RenderElement[] {
       dimColor: m !== r.model && m !== prev,
     }),
   )
+  // Jev sits beside the tiers: lit when it made this pick, dim when the rules did
+  chips.push(Text({ children: [' jev '], color: 'claude', bold: r.by === 'jev', inverse: r.by === 'jev', dimColor: r.by !== 'jev' }))
   const signal = [1, 2, 3, 4].map(i => Text({ children: ['▂▄▆█'[i - 1] ?? ' '], color: i <= level ? MODEL_TONE[r.model] : 'inactive' }))
   const confBar = '▬'.repeat(Math.round(r.conf * 5)).padEnd(5, '·')
   return [
@@ -183,6 +187,9 @@ export function drawBand(els: Els, t: Snapshot): RenderElement {
       listRow(els, '◇', 'MCP', t.mcp.slice(-3).map(m => `${m.server} · ${m.tool} ×${m.calls}`), 'no calls yet', `${calls} calls`),
       listRow(els, '▣', 'Plugins', [...t.plugins.slice(-5), ...(extra > 0 ? [`+${extra}`] : [])], 'none seen', `${t.plugins.length} mods`),
       meterRow(els, t, '◆', 'Context', ctx ? `${fmtTokens(ctx.tokens)} / ${fmtTokens(ctx.window)} · ${fmtPct(ctx.percent)}` : '—', 'context', ctx?.percent ?? null, ACCENT.brand),
+      ...(t.jev
+        ? [meterRow(els, t, '◈', 'Jev · context', `${fmtTokens(t.jev.input)} / ${fmtTokens(JEV_WINDOW)} · ${fmtPct((t.jev.input / JEV_WINDOW) * 100)} · ${t.jev.calls} calls`, 'jev', (t.jev.input / JEV_WINDOW) * 100, ACCENT.brand)]
+        : []),
       meterRow(els, t, '◷', 'Session · 5h', five ? `5h · ${fmtPct(five.percentUsed)} used` : 'no reading', 'session', five?.percentUsed ?? null, ACCENT.sonnet),
       meterRow(els, t, '◷', 'Weekly · 7d', week ? `7d · ${fmtPct(week.percentUsed)} used` : 'no reading', 'weekly', week?.percentUsed ?? null, ACCENT.opus),
     ],

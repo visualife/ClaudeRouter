@@ -167,7 +167,7 @@ const INPUT = { text: 'debug the race in the token refresh', tools: [] }
 
 test('Jev picks a tier from the Choice answer', async () => {
   const pick = await askJev(ok({ answers: { route: { choice: 'opus', probabilities: { opus: 0.82 } } } }), 'k', INPUT)
-  expect(pick).toEqual({ model: 'opus', conf: 0.82 })
+  expect(pick).toMatchObject({ model: 'opus', conf: 0.82 })
 })
 
 test('Jev failures all return null so the rules take over', async () => {
@@ -194,9 +194,9 @@ async function warmWorld($: any, on: On, answers: boolean[]) {
   on('model.fork', () => {
     forks += 1
     const ok = answers.shift() ?? true
-    return { value: ok
+    return { value: (ok
       ? { isAnswered: true as const, text: 'warm', usage: { input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 200000, cache_creation_input_tokens: 0 } }
-      : { isAnswered: false as const, reason: 'api-error' as const, status: 500 } }
+      : { isAnswered: false as const, reason: 'api-error' as const, status: 500 }) as never }
   })
   on('turn.step', async function* (_$, e) {
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
@@ -240,4 +240,26 @@ test('keep-warm off sends no ping', { timeoutMs: 120_000 }, async ($, on) => {
   await $.command.run({ command: 'clauderouter', args: 'warm off', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
   await idle(clock, 120)
   expect(forks()).toBe(0)
+})
+
+test('Jev reports the tokens of its call for the context bar', async () => {
+  const pick = await askJev(ok({ answers: { route: { choice: 'sonnet', probabilities: { sonnet: 0.7 } } }, usage: { input_tokens: 865, output_tokens: 162 } }), 'k', INPUT)
+  expect(pick).toMatchObject({ model: 'sonnet', input: 865, output: 162 })
+})
+
+test('with the Jev engine the band lights jev and draws its context bar', async ($, on) => {
+  world(on)
+  on('env.get', () => ({ value: 'key' }))
+  on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ answers: { route: { choice: 'opus', probabilities: { opus: 0.9 } } }, usage: { input_tokens: 16000, output_tokens: 160 } }) } }))
+  on('turn.step', async function* (_$, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'clauderouter', args: 'engine jev', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  await $.turn.start({ turnId: 't1', text: 'list the files' })
+  for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-sonnet-5-5', effort: 'low', messageCount: 1 })) { /* drain */ }
+  const band = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'AbovePrompt', requestId: 'band', props: BAND })
+  expect((await band.find({ type: 'Text', text: /Jev · context/ }))).toBeTruthy()
+  expect((await band.find({ type: 'Text', text: /16k \/ 64k · 25% · 1 calls/ }))).toBeTruthy()
+  await band.unmount()
 })

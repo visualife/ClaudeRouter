@@ -19,6 +19,7 @@ const skills = atom({ plugin: 'agent-ClaudeRouter', key: 'skills' } as const, []
 const mcp = atom({ plugin: 'agent-ClaudeRouter', key: 'mcp' } as const, [])
 const plugins = atom({ plugin: 'agent-ClaudeRouter', key: 'plugins' } as const, [])
 const usage = atom({ plugin: 'agent-ClaudeRouter', key: 'usage' } as const, null)
+const jev = atom({ plugin: 'agent-ClaudeRouter', key: 'jev' } as const, null)
 const options = atom({ plugin: 'agent-ClaudeRouter', key: 'options' } as const, DEFAULT_OPTIONS)
 const totals = atom({ plugin: 'agent-ClaudeRouter', key: 'totals' } as const, { tokens: 0, turns: 0 })
 
@@ -44,6 +45,7 @@ async function snapshot($: EngineInterface, surface: string, columns: number, ro
     mcp: await read($, mcp),
     plugins: await read($, plugins),
     usage: await read($, usage),
+    jev: await read($, jev),
     totals: await read($, totals),
     now: await $.clock.now(),
     frame,
@@ -144,10 +146,11 @@ export const register: Register = on => {
     if ((await read($, options)).engine === 'jev') {
       const key = await $.env.get('TYPESAFE_API_KEY')
       const timeout = new Promise<null>(resolve => { $.clock.after(JEV_TIMEOUT_MS, () => resolve(null)) })
-      const jev = key ? await Promise.race([askJev((url, init) => $.http.fetch(url, init), key, input), timeout]) : null
-      if (jev) {
-        pick = { model: jev.model, conf: jev.conf, effort: effortFor(jev.model, input.text, input.subagentType) }
+      const asked = key ? await Promise.race([askJev((url, init) => $.http.fetch(url, init), key, input), timeout]) : null
+      if (asked) {
+        pick = { model: asked.model, conf: asked.conf, effort: effortFor(asked.model, input.text, input.subagentType) }
         by = 'jev'
+        await update($, jev, u => ({ calls: (u?.calls ?? 0) + 1, input: asked.input, output: asked.output }))
       }
     }
     const kept = familyOf(e.model) === pick.model
