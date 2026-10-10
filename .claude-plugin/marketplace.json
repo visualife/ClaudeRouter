@@ -1,0 +1,12 @@
+{
+  "name": "router-mods",
+  "owner": { "name": "studio.visualife" },
+  "plugins": [
+    {
+      "name": "agent-ClaudeRouter",
+      "source": "./",
+      "description": "Routes each request to haiku/sonnet/opus, live band above the prompt, /clauderouter pane.",
+      "version": "0.1.0"
+    }
+  ]
+}

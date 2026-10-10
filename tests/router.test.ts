@@ -1,0 +1,161 @@
+import type { On } from 'claude-code'
+import { expect, mock, test } from 'claude-code/testing'
+
+import { pickRoute, roleOf } from '../hooks/route'
+
+const PLUGIN = 'agent-ClaudeRouter'
+const SCROLL = { offset: 0, bodyRows: 20 }
+const BAND = { hasSurvey: false, isWorking: true, maxRows: 30, bodyColumns: 100, scroll: SCROLL, view: {} }
+const PANE = { title: 'ClaudeRouter', isFocused: false, bodyColumns: 100, placement: 'inline' as const, scroll: SCROLL, view: {} }
+const USAGE = {
+  startedAt: 0,
+  context: { tokens: 124_000, window: 1_000_000, percent: 12 },
+  rateLimits: [
+    { kind: 'five_hour', percentUsed: 31 },
+    { kind: 'seven_day', percentUsed: 64 },
+  ],
+  cost: { usd: 0.32 },
+}
+
+// The engine's side of the events the mod touches: what a real session answers beneath the plugin
+function world(on: On) {
+  const clock = mock.clock(on)
+  on('session.usage', () => ({ value: USAGE }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+  on('turn.complete', (_$, e) => ({ text: e.answer }))
+  on('agent.spawn', (_$, e) => ({ model: e.model ?? 'haiku', agentId: 'a1' }))
+  return clock
+}
+
+test('a short read-only request routes to haiku at low effort', () => {
+  const pick = pickRoute({ text: 'list the files here and read the README', tools: [] })
+  expect(pick.model).toBe('haiku')
+  expect(pick.effort).toBe('low')
+})
+
+test('planning and debugging across modules route to opus', () => {
+  const pick = pickRoute({
+    text: 'plan the architecture and debug the token check across modules',
+    tools: [],
+  })
+  expect(pick.model).toBe('opus')
+})
+
+test('an Explore subagent routes to haiku', () => {
+  const pick = pickRoute({ text: 'find where the routes are defined', tools: [], subagentType: 'Explore' })
+  expect(pick.model).toBe('haiku')
+})
+
+// The design's sample routes (R in the HTML handoff)
+const SAMPLES = [
+  { text: 'debug why the refresh token check fails', tools: ['Bash', 'Edit'], model: 'opus' },
+  { text: 'trace the 401 in middleware/auth.ts', tools: ['Read', 'Grep'], model: 'opus' },
+  { text: 'list files under src/routes', tools: ['Glob'], model: 'haiku' },
+  { text: 'rename authUser to currentUser', tools: ['Edit'], model: 'haiku' },
+  { text: 'write fixtures for the login flow', tools: ['Write'], model: 'sonnet' },
+  { text: 'plan the session store migration', tools: [], model: 'opus', effort: 'xhigh' },
+] as const
+
+test("the design's sample prompts route as drawn", () => {
+  for (const s of SAMPLES) {
+    const pick = pickRoute({ text: s.text, tools: s.tools })
+    expect(`${s.text} → ${pick.model}`).toBe(`${s.text} → ${s.model}`)
+    if ('effort' in s) expect(pick.effort).toBe(s.effort)
+    expect(pick.conf >= 0.5 && pick.conf <= 0.99).toBe(true)
+  }
+})
+
+test('subagents wear a role by type and task', () => {
+  expect(roleOf('Explore', 'map the routes')).toBe('scout')
+  expect(roleOf('Plan', 'outline the migration')).toBe('planner')
+  expect(roleOf('general-purpose', 'verify token expiry')).toBe('researcher')
+  expect(roleOf('general-purpose', 'write fixtures')).toBe('builder')
+})
+
+test('turn.step goes down on the routed model and effort', async ($, on) => {
+  world(on)
+  let sent = ''
+  on('turn.step', async function* (_$, e) {
+    sent = `${e.model}/${e.effort}`
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  await $.turn.start({ turnId: 't1', text: 'list the files and read the README' })
+  const step = $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 1 })
+  for await (const _ of step) {
+    // the response chunks are not needed
+  }
+  expect(sent).toBe('claude-haiku-5-5/low')
+})
+
+// The band and the pane draw a running task with a subagent on every surface that takes them;
+// the engine refuses a tree its table cannot draw, so a mount that resolves is a valid drawing.
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`the band and the pane draw on ${surface}`, async ($, on) => {
+    world(on)
+    await $.session.start({ cwd: '/', surface, isInteractive: true })
+    await $.turn.start({ turnId: 't1', text: 'plan the architecture and debug the token check' })
+    await $.agent.spawn({
+      tool_use_id: 'u1',
+      prompt: 'find where the routes are defined',
+      description: 'Map the routes',
+      subagentType: 'Explore',
+      provider: { plugin: 'engine', tier: 'core' },
+      parentModel: 'claude-opus-5-5',
+      background: true,
+      fork: false,
+    })
+
+    const band = await $.ui.mount({ plugin: PLUGIN, surface, component: 'AbovePrompt', props: BAND })
+    expect(await band.find({ text: /ClaudeRouter/ })).toBeDefined()
+    expect(await band.find({ text: /Model route/ })).toBeDefined()
+    expect(await band.find({ text: /0\/1 agents/ })).toBeDefined()
+    expect(await band.find({ text: /Map the routes/ })).toBeDefined()
+    expect(await band.find({ text: /Weekly/ })).toBeDefined()
+    // Raster is the terminal's alone: the desktop draws its bars as Text
+    expect((await band.findAll({ type: 'Raster' })).length > 0).toBe(surface === 'terminal')
+    await band.unmount()
+
+    const pane = await $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', requestId: PLUGIN, props: PANE })
+    expect(await pane.find({ text: /Running · 2/ })).toBeDefined()
+    expect(await pane.find({ text: /Finished · 0/ })).toBeDefined()
+    expect(await pane.find({ text: /Cost/ })).toBeDefined()
+    await pane.unmount()
+  })
+}
+
+test('while a turn runs the terminal repaints its shimmering bars with $.ui.blit', async ($, on) => {
+  const clock = world(on)
+  const blits: { requestId: string; key: string; cells: string }[] = []
+  on('ui.blit', (_$, e) => {
+    if ('cells' in e) blits.push({ requestId: e.requestId, key: e.key, cells: e.cells })
+    return { value: {} }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.turn.start({ turnId: 't1', text: 'plan the architecture' })
+  const band = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'AbovePrompt', requestId: 'band', props: BAND })
+
+  await clock.advance(400)
+  const keys = new Set(blits.map(b => b.key))
+  expect(keys.has('task-t1')).toBe(true)
+  expect(keys.has('crab-router')).toBe(true)
+  // A bar of 30 cells is 30 triplets of 4 bytes: 360 bytes, 480 base64 characters
+  expect(blits.find(b => b.key === 'task-t1')?.cells.length).toBe(480)
+  expect(blits.every(b => b.requestId === 'band')).toBe(true)
+
+  // Nothing is repainted once the turn is over
+  await $.turn.complete({ turnId: 't1', reason: 'answer', isAborted: false, durationMs: 300, answer: '' })
+  const before = blits.length
+  await clock.advance(400)
+  expect(blits.length).toBe(before)
+  await band.unmount()
+})
+
+test('hysteresis keeps the current model on a tie, but not on a clear win', () => {
+  // "why list": haiku and opus tie, so sonnet by default — unless a tied model is already running
+  expect(pickRoute({ text: 'why list', tools: [] }).model).toBe('sonnet')
+  expect(pickRoute({ text: 'why list', tools: [], current: 'opus' }).model).toBe('opus')
+  // a clear sonnet win does not hold the old model
+  expect(pickRoute({ text: 'fix the login bug in the form', tools: [], current: 'opus' }).model).toBe('sonnet')
+})
