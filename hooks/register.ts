@@ -3,6 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Agent, Route, Task } from '../types'
 import { JEV_TIMEOUT_MS, askJev } from './jev'
 import { DEFAULT_OPTIONS, WARM_EVERY_MS, applyArgs } from './options'
+import { type Pin, directiveOf, guard } from './guard'
 import { type Els, type Snapshot, drawBand } from './band'
 import { drawPane } from './pane'
 import { type Anim, animCells } from './pixel'
@@ -30,6 +31,10 @@ let terminal = false
 let turnId = ''
 let turnText = ''
 let turnTools: string[] = []
+// Cost guards: the session cost when this turn began, a "@model:effort" prompt prefix, and one warning per turn
+let turnCostStart = 0
+let turnPin: Pin | null = null
+let warned = false
 // When the main thread last sent a request, for keep-warm
 let lastRequestAt: number | null = null
 const subagents = new Map<string, { text: string; subagentType?: string }>()
@@ -101,7 +106,7 @@ export const register: Register = on => {
   on('command.run', { command: 'clauderouter' }, async ($, e) => {
     if (e.args.trim()) {
       const now = await $.clock.now()
-      const { next, text } = applyArgs(e.args, await read($, options), now)
+      const { next, text } = applyArgs(e.args, { ...DEFAULT_OPTIONS, ...(await read($, options)) }, now)
       if (next) await update($, options, () => next)
       return { text }
     }
@@ -115,6 +120,9 @@ export const register: Register = on => {
     turnId = e.turnId
     turnText = e.text
     turnTools = []
+    turnPin = directiveOf(e.text)
+    warned = false
+    turnCostStart = (await read($, usage))?.cost ?? 0
     const task: Task = {
       id: e.turnId,
       name: nameOf(e.text),
@@ -143,7 +151,9 @@ export const register: Register = on => {
     let pick = pickRoute(input)
     let by: Route['by'] = 'rules'
     if (!e.agentId) lastRequestAt = await $.clock.now()
-    if ((await read($, options)).engine === 'jev') {
+    // Options saved by an older version lack the guard fields: defaults fill them in
+    const opts = { ...DEFAULT_OPTIONS, ...(await read($, options)) }
+    if (opts.engine === 'jev') {
       const key = await $.env.get('TYPESAFE_API_KEY')
       const timeout = new Promise<null>(resolve => { $.clock.after(JEV_TIMEOUT_MS, () => resolve(null)) })
       const asked = key ? await Promise.race([askJev((url, init) => $.http.fetch(url, init), key, input), timeout]) : null
@@ -153,6 +163,28 @@ export const register: Register = on => {
         await update($, jev, u => ({ calls: (u?.calls ?? 0) + 1, input: asked.input, output: asked.output }))
       }
     }
+    // Cost guards run last, on whoever picked: they cap what the turn may spend
+    const u = await read($, usage)
+    const turnCost = u?.cost != null ? Math.max(0, u.cost - turnCostStart) : null
+    const guarded = guard({
+      pick,
+      pin: e.agentId ? null : (turnPin ?? (opts.pin ? { model: opts.pin, effort: opts.pinEffort } : null)),
+      maxEffort: opts.maxEffort,
+      budget: opts.budget,
+      ctxCap: opts.ctxCap,
+      isSub: Boolean(e.agentId),
+      isPlan: input.subagentType === 'Plan',
+      step: e.index,
+      textLen: input.text.length,
+      turnTools,
+      contextTokens: u?.context.tokens ?? null,
+      turnCost,
+    })
+    if (!warned && guarded.limits.some(l => l.startsWith('turn $') || l.startsWith('ctx '))) {
+      warned = true
+      $.ui.toast(`ClaudeRouter: ${guarded.limits.join(', ')}. Downgraded to ${guarded.model}/${guarded.effort}.`)
+    }
+    pick = { ...pick, model: guarded.model, effort: guarded.effort }
     const kept = familyOf(e.model) === pick.model
     const result = yield* next({ ...e, model: idFor(pick.model, e.model), effort: pick.effort })
 
@@ -164,7 +196,7 @@ export const register: Register = on => {
       by,
       engineModel: e.model,
       source: e.agentId ? 'subagent' : 'main',
-      why: (by === 'jev' ? 'jev · ' : '') + whyOf(input),
+      why: (by === 'jev' ? 'jev · ' : '') + whyOf(input) + (guarded.limits.length > 0 ? ` · guard ${guarded.limits.join(',')}` : ''),
     }
     await update($, route, () => decided)
     if (e.agentId) {
@@ -204,7 +236,9 @@ export const register: Register = on => {
   on('agent.spawn', async ($, e, next) => {
     const text = `${e.description} ${e.prompt}`
     const pick = pickRoute({ text, tools: [], subagentType: e.subagentType })
-    const result = await next({ ...e, model: e.model ?? pick.model })
+    // Subagents never start on Opus unless they plan: execution is Sonnet or Haiku
+    const spawnModel = pick.model === 'opus' && e.subagentType !== 'Plan' ? 'sonnet' : pick.model
+    const result = await next({ ...e, model: e.model ?? spawnModel })
     if (result.deny) return result
 
     if (result.agentId) subagents.set(result.agentId, { text, subagentType: e.subagentType })

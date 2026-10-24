@@ -13,6 +13,34 @@ A Claude Code mod that picks the **model and effort for each request**, and keep
 - **Keep the cache warm (optional)**: pings the prompt cache every 50 minutes while you are idle, so a break does not cost a full re-write.
 - **Pixel mascots** per subagent role: scout (Explore), planner (Plan), researcher, builder.
 
+## Cost guards (v0.4)
+
+Applied on every model request, after the router (or Jev) has picked. Defaults protect your plan; change them with `/clauderouter`.
+
+| Guard | Default | Effect |
+|---|---|---|
+| Effort ceiling | `high` | `xhigh` is never picked automatically. `/clauderouter cap medium` to lower it. |
+| Opus plans, Sonnet executes | first 2 requests | After that, or once the turn writes files / runs 6+ tools, the turn moves to Sonnet (medium). |
+| Long spec | > 1200 chars | Opus never runs above medium on it. |
+| Subagents | not Opus | Only `Plan` subagents may use Opus; all others capped at medium. |
+| Turn budget | $3 per turn | Over it: Sonnet medium. Over 2×: Sonnet low. A toast tells you. `/clauderouter budget 5` or `off`. |
+| Context cap | 150k tokens | Over it: Sonnet medium. Over 1.5×: Sonnet low. `/clauderouter ctx 200k` or `off`. |
+| Your choice wins | none | `/clauderouter pin sonnet medium` applies from the **next request, even mid-turn**. `pin auto` releases it. Or prefix one prompt: `@sonnet:med build the app` / `@opus:high ...`. |
+
+The band's second line shows `guard ...` with the reason whenever a limit changed the pick. Budget uses the session cost the engine reports (API-equivalent USD).
+
+## Claude desktop
+
+The mod is surface-aware: the band and pane already draw with plain `Text` bars on `desktop` (no Raster), and the tests cover both surfaces. Claude desktop's Code tab runs the same Claude Code engine, so install it there with the same two commands:
+
+```
+/plugin marketplace add C:\Users\studi.REAL\Documents\GitHub\ClaudeRouter
+/plugin install agent-ClaudeRouter@router-mods
+/reload-plugins
+```
+
+Install at user scope so the CLI and the desktop Code tab share it. Chat and Cowork tabs do not run mods.
+
 ## Requirements
 
 - A Claude Code build that supports mods (plugins that ship `hooks/*.ts` modules and a `types` entry).
@@ -53,6 +81,10 @@ Set them from the prompt; they persist across reloads.
 | `/clauderouter engine rules` | Local keyword rules (default). |
 | `/clauderouter warm 2h` | Keep the prompt cache warm for 2h (default 2h, max 6h). |
 | `/clauderouter warm off` | Stop. |
+| `/clauderouter pin <model> [effort]` / `pin auto` | Force a model (and effort), effective next request. |
+| `/clauderouter cap <effort>` | Highest effort the router may pick. |
+| `/clauderouter budget <usd\|off>` | Per-turn spend limit. |
+| `/clauderouter ctx <150k\|off>` | Context size limit. |
 | `/clauderouter status` | Show the current options. |
 
 **Jev**: it only chooses the tier; Claude still does the work. Each routed request sends the prompt text (first 4000 characters) to `api.typesafe.ai` and costs one small Jev call (about 0.3 s). In the band, `jev` sits beside `haiku sonnet opus` on the Model route row: lit when Jev made the pick, dim when the rules did. Once Jev has been used, a `Jev · context` bar appears: the last call's input tokens against Jev's 64k per-request window, with the call count. A Jev pick also starts the band's second line with `jev ·`. With no key, an error or a 2.5 s timeout, the rules decide, so nothing blocks.
@@ -80,6 +112,7 @@ Routing lives in `hooks/route.ts`: edit the `HEAVY`, `MID` and `LIGHT` keyword l
 |---|---|
 | `hooks/register.ts` | Hook and command registration, state, `/clauderouter` |
 | `hooks/route.ts` | Model and effort heuristics |
+| `hooks/guard.ts` | Cost guards: effort ceiling, plan/execute split, budget, context cap, pin |
 | `hooks/band.ts` | The band above the prompt |
 | `hooks/pane.ts` | The `/clauderouter` pane |
 | `hooks/pixel.ts`, `format.ts`, `lists.ts` | Sprites, formatting, list rows |

@@ -6,7 +6,18 @@ export type Effort = 'low' | 'medium' | 'high' | 'xhigh'
 export type Engine = 'rules' | 'jev'
 
 // The user's switches, set with /clauderouter. warmUntil is a clock time in ms; 0 means keep-warm is off.
-export type Options = { engine: Engine; warmUntil: number }
+// pin/pinEffort: a model (and effort) forced on every main-thread request; null = the router decides.
+// maxEffort: the highest effort the router may pick by itself. budget: USD one turn may spend before it is
+// downgraded (0 = off). ctxCap: context tokens above which requests are downgraded (0 = off).
+export type Options = {
+  engine: Engine
+  warmUntil: number
+  pin: Model | null
+  pinEffort: Effort | null
+  maxEffort: Effort
+  budget: number
+  ctxCap: number
+}
 
 // The latest routing decision, for the main conversation or one subagent request
 export type Route = {

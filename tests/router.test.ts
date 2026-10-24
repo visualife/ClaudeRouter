@@ -183,7 +183,7 @@ test('/clauderouter options: engine and keep-warm', () => {
   expect(applyArgs('engine gpt', DEFAULT_OPTIONS, 0).next).toBe(null)
   expect(applyArgs('warm 90m', DEFAULT_OPTIONS, 1000).next?.warmUntil).toBe(1000 + 90 * 60_000)
   expect(applyArgs('warm 99h', DEFAULT_OPTIONS, 0).next?.warmUntil).toBe(6 * 3_600_000)
-  expect(applyArgs('warm off', { engine: 'rules', warmUntil: 5 }, 0).next?.warmUntil).toBe(0)
+  expect(applyArgs('warm off', { ...DEFAULT_OPTIONS, warmUntil: 5 }, 0).next?.warmUntil).toBe(0)
   expect(applyArgs('warm soon', DEFAULT_OPTIONS, 0).next).toBe(null)
 })
 

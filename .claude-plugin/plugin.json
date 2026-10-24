@@ -1,6 +1,6 @@
 {
   "name": "agent-ClaudeRouter",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Picks the model and effort per request, and shows a live band above the prompt: routing, running agents, skills, MCP, context and plan usage, plus a /ClaudeRouter pane",
   "author": { "name": "Visualife" },
   "types": "./types/index.d.ts"
