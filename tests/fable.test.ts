@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { directiveOf, guard } from '../hooks/guard'
-import { applyArgs, DEFAULT_OPTIONS } from '../hooks/options'
+import { applyArgs, DEFAULT_OPTIONS, normalize } from '../hooks/options'
 import { familyOf, idFor, MODEL_IDS, pickRoute } from '../hooks/route'
 
 // Regression: a session on Fable was rewritten to Sonnet or Haiku on every request, because Fable was not a
@@ -52,11 +52,28 @@ test('@fable pins one prompt', () => {
   expect(directiveOf('@fable:med write the page')).toEqual({ model: 'fable', effort: 'medium' })
 })
 
-test('/clauderouter knows Fable', () => {
-  expect(DEFAULT_OPTIONS.fableLock).toBe(true)
+test('/clauderouter knows Fable and the model locks', () => {
+  expect(DEFAULT_OPTIONS.locks).toEqual(['fable'])
   expect(applyArgs('pin fable', DEFAULT_OPTIONS, 0).next).toMatchObject({ pin: 'fable' })
-  expect(applyArgs('fable auto', DEFAULT_OPTIONS, 0).next).toMatchObject({ fableLock: false })
-  expect(applyArgs('fable lock', { ...DEFAULT_OPTIONS, fableLock: false }, 0).next).toMatchObject({ fableLock: true })
-  expect(applyArgs('fable maybe', DEFAULT_OPTIONS, 0).next).toBe(null)
-  expect(applyArgs('status', DEFAULT_OPTIONS, 0).text).toContain('fable lock: on')
+  expect(applyArgs('lock opus', DEFAULT_OPTIONS, 0).next).toMatchObject({ locks: ['fable', 'opus'] })
+  expect(applyArgs('unlock fable', DEFAULT_OPTIONS, 0).next).toMatchObject({ locks: [] })
+  expect(applyArgs('lock all', DEFAULT_OPTIONS, 0).next).toMatchObject({ locks: ['haiku', 'sonnet', 'opus', 'fable'] })
+  expect(applyArgs('lock none', DEFAULT_OPTIONS, 0).next).toMatchObject({ locks: [] })
+  expect(applyArgs('lock maybe', DEFAULT_OPTIONS, 0).next).toBe(null)
+  // 0.4.1 spelling still works
+  expect(applyArgs('fable auto', DEFAULT_OPTIONS, 0).next).toMatchObject({ locks: [] })
+  expect(applyArgs('fable lock', { ...DEFAULT_OPTIONS, locks: [] }, 0).next).toMatchObject({ locks: ['fable'] })
+  expect(applyArgs('status', DEFAULT_OPTIONS, 0).text).toContain('locked: fable')
+})
+
+test('options saved by 0.4.1 are migrated', () => {
+  expect(normalize({ fableLock: false }).locks).toEqual([])
+  expect(normalize({ fableLock: true }).locks).toEqual(['fable'])
+  expect(normalize({}).locks).toEqual(['fable'])
+  expect(normalize({ locks: ['opus'] }).locks).toEqual(['opus'])
+})
+
+test('familyOf ignores case', () => {
+  expect(familyOf('Claude-Fable-5-1')).toBe('fable')
+  expect(familyOf('CLAUDE-SONNET-5-5')).toBe('sonnet')
 })

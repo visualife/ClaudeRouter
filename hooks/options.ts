@@ -10,8 +10,17 @@ export const DEFAULT_OPTIONS: Options = {
   maxEffort: 'high',
   budget: 3,
   ctxCap: 150_000,
-  // A session the user put on Fable is left alone: no rerouting, no caps
-  fableLock: true,
+  // A session on a locked model is left alone: no rerouting, no caps. Fable is locked by default.
+  locks: ['fable'],
+}
+export const ALL_MODELS: Model[] = ['haiku', 'sonnet', 'opus', 'fable']
+const isModel = (s: string): s is Model => (ALL_MODELS as string[]).includes(s)
+
+// Options saved by an older version: fill the guard fields, and turn the old fableLock flag into locks
+export function normalize(saved: Partial<Options> & { fableLock?: boolean }): Options {
+  const { fableLock, ...rest } = saved
+  const locks = rest.locks ?? (fableLock === false ? [] : DEFAULT_OPTIONS.locks)
+  return { ...DEFAULT_OPTIONS, ...rest, locks }
 }
 // A ping every 50 minutes keeps a one-hour prompt cache read instead of re-written
 export const WARM_EVERY_MS = 50 * 60 * 1000
@@ -27,7 +36,8 @@ export const USAGE = [
   '/clauderouter pin sonnet [medium]  force a model (and effort) from the next request, even mid-turn',
   '/clauderouter pin auto        let the router decide again',
   '/clauderouter pin fable [high]  force Fable (also "@fable ..." for one prompt)',
-  '/clauderouter fable lock      leave a Fable session alone (default); "fable auto" routes it like the others',
+  '/clauderouter lock opus       leave a session on that model alone: no rerouting, no caps (fable is locked by default)',
+  '/clauderouter unlock opus     route that model like the others again; "lock all" / "lock none" for every model',
   '/clauderouter cap high        highest effort the router may pick by itself (default high)',
   '/clauderouter budget 3        USD one turn may spend before it is downgraded (off = no limit)',
   '/clauderouter ctx 150k        context size above which requests are downgraded (off = no limit)',
@@ -64,7 +74,7 @@ export function describe(o: Options, now: number): string {
   const pin = o.pin ? `${o.pin}${o.pinEffort ? `/${o.pinEffort}` : ''}` : 'auto'
   const budget = o.budget > 0 ? `$${o.budget}/turn` : 'off'
   const ctx = o.ctxCap > 0 ? `${Math.round(o.ctxCap / 1000)}k` : 'off'
-  return `engine: ${o.engine} · model: ${pin} · fable lock: ${o.fableLock ? 'on' : 'off'} · max effort: ${o.maxEffort} · budget: ${budget} · ctx cap: ${ctx} · keep-warm: ${warm}`
+  return `engine: ${o.engine} · model: ${pin} · locked: ${o.locks.length > 0 ? o.locks.join(', ') : 'none'} · max effort: ${o.maxEffort} · budget: ${budget} · ctx cap: ${ctx} · keep-warm: ${warm}`
 }
 
 // Applies one /clauderouter argument string. next is null when the args are not an option change.
@@ -90,10 +100,20 @@ export function applyArgs(args: string, o: Options, now: number): { next: Option
       const pin: Model = m
       return { next: { ...o, pin, pinEffort: effort }, text: `model pinned: ${pin}${effort ? `/${effort}` : ''}` }
     }
+    case 'lock':
+    case 'unlock': {
+      const on = cmd.toLowerCase() === 'lock'
+      const m = arg.trim().toLowerCase()
+      if (on && m === 'all') return { next: { ...o, locks: [...ALL_MODELS] }, text: 'locked: every model is left alone' }
+      if ((on && m === 'none') || (!on && m === 'all')) return { next: { ...o, locks: [] }, text: 'locked: none, every model is routed' }
+      if (!isModel(m)) return { next: null, text: `${cmd} takes ${ALL_MODELS.join(', ')}${on ? ', all or none' : ' or all'}\n${USAGE}` }
+      const locks = on ? [...new Set([...o.locks, m])] : o.locks.filter(x => x !== m)
+      return { next: { ...o, locks }, text: `${m} ${on ? 'locked: a session on it is left alone' : 'unlocked: routed like the others'} · locked: ${locks.length > 0 ? locks.join(', ') : 'none'}` }
+    }
+    // Kept from 0.4.1: "fable lock" and "fable auto"
     case 'fable': {
       if (arg !== 'lock' && arg !== 'auto') return { next: null, text: `fable takes lock or auto\n${USAGE}` }
-      const lock = arg === 'lock'
-      return { next: { ...o, fableLock: lock }, text: lock ? 'fable lock: on, a Fable session is left alone' : 'fable lock: off, a Fable session is routed like the others' }
+      return applyArgs(`${arg === 'lock' ? 'lock' : 'unlock'} fable`, o, now)
     }
     case 'cap': {
       const effort = toEffort(arg)
