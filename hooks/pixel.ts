@@ -7,6 +7,7 @@ export const ACCENT = {
   haiku: 0x55c99a,
   sonnet: 0xa79cf2,
   opus: 0xf0b84a,
+  fable: 0x6cb6ff,
   brand: 0xe8835f,
   fail: 0xd9534f,
   track: 0x55535b,

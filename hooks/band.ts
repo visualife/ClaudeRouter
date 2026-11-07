@@ -27,9 +27,9 @@ export type Snapshot = {
 }
 
 // Text uses theme keys so light and dark both read; Rasters use the design's accents
-export const MODEL_TONE = { haiku: 'success', sonnet: 'suggestion', opus: 'warning' } as const
+export const MODEL_TONE = { haiku: 'success', sonnet: 'suggestion', opus: 'warning', fable: 'claude' } as const
 const EFFORT_LEVEL = { low: 1, medium: 2, high: 3, xhigh: 4 } as const
-const MODELS = ['haiku', 'sonnet', 'opus'] as const
+const MODELS = ['haiku', 'sonnet', 'opus', 'fable'] as const
 const LABEL = 16
 // The crew needs this many rows above the band's own before it is drawn
 const CREW_MIN_ROWS = 22

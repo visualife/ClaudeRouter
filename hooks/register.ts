@@ -1,9 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
-import type { Agent, Route, Task } from '../types'
+import type { Agent, Effort, Route, Task } from '../types'
 import { JEV_TIMEOUT_MS, askJev } from './jev'
 import { DEFAULT_OPTIONS, WARM_EVERY_MS, applyArgs } from './options'
-import { type Pin, directiveOf, guard } from './guard'
+import { EFFORTS, type Pin, directiveOf, guard } from './guard'
 import { type Els, type Snapshot, drawBand } from './band'
 import { drawPane } from './pane'
 import { type Anim, animCells } from './pixel'
@@ -153,6 +153,18 @@ export const register: Register = on => {
     if (!e.agentId) lastRequestAt = await $.clock.now()
     // Options saved by an older version lack the guard fields: defaults fill them in
     const opts = { ...DEFAULT_OPTIONS, ...(await read($, options)) }
+    // Fable lock: a main-thread session the user put on Fable is passed through untouched (model and effort),
+    // unless a pin or an "@model" prefix says otherwise. Without this, the router did not know Fable and
+    // rewrote every request to Sonnet or Haiku.
+    if (!e.agentId && opts.fableLock && familyOf(e.model) === 'fable' && !turnPin && !opts.pin) {
+      const eff: Effort = EFFORTS.includes(e.effort as Effort) ? (e.effort as Effort) : 'high'
+      const passed = yield* next(e)
+      const locked: Route = { model: 'fable', effort: eff, conf: 1, kept: true, by: 'rules', engineModel: e.model, source: 'main', why: 'fable lock · your model choice is left as it is' }
+      await update($, route, () => locked)
+      const lockedTurn = e.turnId
+      await update($, tasks, list => patchTask(list, lockedTurn, { steps: e.index + 1, model: 'fable', effort: eff }))
+      return passed
+    }
     if (opts.engine === 'jev') {
       const key = await $.env.get('TYPESAFE_API_KEY')
       const timeout = new Promise<null>(resolve => { $.clock.after(JEV_TIMEOUT_MS, () => resolve(null)) })

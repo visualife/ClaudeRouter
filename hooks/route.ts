@@ -28,16 +28,32 @@ const LIGHT = /\b(list|read|show|rename|print|count|find|grep|format|typo|log|op
 const DEEP = /\b(plan|architect\w*)\b/i
 const EDITS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']
 const SEARCH = ['Glob', 'Grep', 'Read']
-const FAMILIES: Model[] = ['haiku', 'sonnet', 'opus']
+// The tiers the router scores by itself. Fable is never picked automatically: the user chooses it.
+export type Auto = 'haiku' | 'sonnet' | 'opus'
+const FAMILIES: Auto[] = ['haiku', 'sonnet', 'opus']
+const KNOWN: Model[] = [...FAMILIES, 'fable']
+export const isAuto = (m: Model | null | undefined): m is Auto => m === 'haiku' || m === 'sonnet' || m === 'opus'
+
+// Full ids for a model that cannot be derived from the running id: versions differ per family
+export const MODEL_IDS: Record<Model, string> = {
+  haiku: 'claude-haiku-5-5',
+  sonnet: 'claude-sonnet-5-5',
+  opus: 'claude-opus-5-5',
+  fable: 'claude-fable-5-1',
+}
 
 // The model family a full model id belongs to, or null when it names none
 export function familyOf(id: string): Model | null {
-  return FAMILIES.find(f => id.includes(f)) ?? null
+  return KNOWN.find(f => id.includes(f)) ?? null
 }
 
-// The full model id for a family: the running id with its family swapped, so the version suffix is kept
+// The full model id for a family. The running id is kept when it already is that family. Between haiku, sonnet
+// and opus the family word is swapped, so the version suffix is kept. Anything else (Fable, an unknown id) uses
+// the known id: swapping a word in a Fable id would invent an id that does not exist.
 export function idFor(family: Model, running: string): string {
-  return familyOf(running) ? running.replace(/haiku|sonnet|opus/, family) : `claude-${family}-5-5`
+  if (familyOf(running) === family) return running
+  const swap = isAuto(family) && isAuto(familyOf(running))
+  return swap ? running.replace(/haiku|sonnet|opus/, family) : MODEL_IDS[family]
 }
 
 const hits = (text: string, re: RegExp, cap: number) => Math.min(cap, (text.match(re) ?? []).length)
@@ -58,11 +74,13 @@ export function pickRoute(input: RouteInput): RoutePick {
 
   const ranked = FAMILIES.map(m => [m, score[m]] as const).sort((a, b) => b[1] - a[1])
   const [top, second] = ranked
-  let model: Model = top && second && top[1] > second[1] ? top[0] : 'sonnet'
-  // Hysteresis: stay on the current model unless the new one beats it by more than HYSTERESIS (softmax share)
+  let model: Auto = top && second && top[1] > second[1] ? top[0] : 'sonnet'
+  // Hysteresis: stay on the current model unless the new one beats it by more than HYSTERESIS (softmax share).
+  // Only for tiers the router scores: Fable has no score, so it never takes part.
   const total = FAMILIES.reduce((s, m) => s + Math.exp(score[m]), 0)
-  const share = (m: Model) => Math.exp(score[m]) / total
-  if (input.current && input.current !== model && share(model) - share(input.current) <= HYSTERESIS) model = input.current
+  const share = (m: Auto) => Math.exp(score[m]) / total
+  const cur = isAuto(input.current) ? input.current : null
+  if (cur && cur !== model && share(model) - share(cur) <= HYSTERESIS) model = cur
   const effort: Effort =
     model === 'haiku' ? 'low'
     : model === 'sonnet' ? (score.sonnet >= 2 ? 'medium' : 'low')

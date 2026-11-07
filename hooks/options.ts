@@ -10,6 +10,8 @@ export const DEFAULT_OPTIONS: Options = {
   maxEffort: 'high',
   budget: 3,
   ctxCap: 150_000,
+  // A session the user put on Fable is left alone: no rerouting, no caps
+  fableLock: true,
 }
 // A ping every 50 minutes keeps a one-hour prompt cache read instead of re-written
 export const WARM_EVERY_MS = 50 * 60 * 1000
@@ -24,6 +26,8 @@ export const USAGE = [
   '/clauderouter warm off        stop keeping it warm',
   '/clauderouter pin sonnet [medium]  force a model (and effort) from the next request, even mid-turn',
   '/clauderouter pin auto        let the router decide again',
+  '/clauderouter pin fable [high]  force Fable (also "@fable ..." for one prompt)',
+  '/clauderouter fable lock      leave a Fable session alone (default); "fable auto" routes it like the others',
   '/clauderouter cap high        highest effort the router may pick by itself (default high)',
   '/clauderouter budget 3        USD one turn may spend before it is downgraded (off = no limit)',
   '/clauderouter ctx 150k        context size above which requests are downgraded (off = no limit)',
@@ -60,7 +64,7 @@ export function describe(o: Options, now: number): string {
   const pin = o.pin ? `${o.pin}${o.pinEffort ? `/${o.pinEffort}` : ''}` : 'auto'
   const budget = o.budget > 0 ? `$${o.budget}/turn` : 'off'
   const ctx = o.ctxCap > 0 ? `${Math.round(o.ctxCap / 1000)}k` : 'off'
-  return `engine: ${o.engine} · model: ${pin} · max effort: ${o.maxEffort} · budget: ${budget} · ctx cap: ${ctx} · keep-warm: ${warm}`
+  return `engine: ${o.engine} · model: ${pin} · fable lock: ${o.fableLock ? 'on' : 'off'} · max effort: ${o.maxEffort} · budget: ${budget} · ctx cap: ${ctx} · keep-warm: ${warm}`
 }
 
 // Applies one /clauderouter argument string. next is null when the args are not an option change.
@@ -80,11 +84,16 @@ export function applyArgs(args: string, o: Options, now: number): { next: Option
     case 'pin': {
       const [m = '', e = ''] = arg.split(/\s+/)
       if (m === 'auto' || m === 'off') return { next: { ...o, pin: null, pinEffort: null }, text: 'model: auto' }
-      if (m !== 'haiku' && m !== 'sonnet' && m !== 'opus') return { next: null, text: `pin takes haiku, sonnet, opus or auto\n${USAGE}` }
+      if (m !== 'haiku' && m !== 'sonnet' && m !== 'opus' && m !== 'fable') return { next: null, text: `pin takes haiku, sonnet, opus, fable or auto\n${USAGE}` }
       const effort: Effort | null = e ? toEffort(e) : null
       if (e && !effort) return { next: null, text: `effort takes ${EFFORTS.join(', ')}\n${USAGE}` }
       const pin: Model = m
       return { next: { ...o, pin, pinEffort: effort }, text: `model pinned: ${pin}${effort ? `/${effort}` : ''}` }
+    }
+    case 'fable': {
+      if (arg !== 'lock' && arg !== 'auto') return { next: null, text: `fable takes lock or auto\n${USAGE}` }
+      const lock = arg === 'lock'
+      return { next: { ...o, fableLock: lock }, text: lock ? 'fable lock: on, a Fable session is left alone' : 'fable lock: off, a Fable session is routed like the others' }
     }
     case 'cap': {
       const effort = toEffort(arg)
