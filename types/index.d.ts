@@ -1,6 +1,7 @@
 // The state contract: every value ClaudeRouter keeps in $.state, declared under the mod's name
 
-export type Model = 'haiku' | 'sonnet' | 'opus'
+// fable is never picked by the router: it is the user's own choice (/model, pin or @fable) and is left alone
+export type Model = 'haiku' | 'sonnet' | 'opus' | 'fable'
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh'
 // Who picks the tier: the local keyword rules, or Jev (falls back to the rules when it is unreachable)
 export type Engine = 'rules' | 'jev'
@@ -17,6 +18,8 @@ export type Options = {
   maxEffort: Effort
   budget: number
   ctxCap: number
+  // true: a session the user put on Fable is not rerouted or capped (unless a pin or @model prefix says so)
+  fableLock: boolean
 }
 
 // The latest routing decision, for the main conversation or one subagent request

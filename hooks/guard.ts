@@ -5,7 +5,7 @@ import type { RoutePick } from './route'
 // The router decides what a prompt *looks like*; the guard decides what the turn may *cost*.
 
 export const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh']
-const MODELS: Model[] = ['haiku', 'sonnet', 'opus']
+const MODELS: Model[] = ['haiku', 'sonnet', 'opus', 'fable']
 const rankE = (e: Effort) => EFFORTS.indexOf(e)
 const rankM = (m: Model) => MODELS.indexOf(m)
 
@@ -13,7 +13,7 @@ export const capEffort = (e: Effort, max: Effort): Effort => (rankE(e) > rankE(m
 const capModel = (m: Model, max: Model): Model => (rankM(m) > rankM(max) ? max : m)
 
 // Effort when a model is pinned without one
-export const DEFAULT_EFFORT: Record<Model, Effort> = { haiku: 'low', sonnet: 'medium', opus: 'high' }
+export const DEFAULT_EFFORT: Record<Model, Effort> = { haiku: 'low', sonnet: 'medium', opus: 'high', fable: 'high' }
 
 // Opus may plan: it keeps the first requests of a turn, then the turn moves to Sonnet
 export const OPUS_STEPS = 2
@@ -95,7 +95,7 @@ export function guard(i: GuardInput): Guarded {
 }
 
 // "@sonnet", "@opus:high", "@haiku:med" at the very start of a prompt pins that turn
-const DIRECTIVE = /^\s*@(haiku|sonnet|opus)(?::(low|med|medium|high|xhigh))?(?=\s|$)/i
+const DIRECTIVE = /^\s*@(haiku|sonnet|opus|fable)(?::(low|med|medium|high|xhigh))?(?=\s|$)/i
 
 export function toEffort(s: string): Effort | null {
   const v = s.toLowerCase() === 'med' ? 'medium' : s.toLowerCase()

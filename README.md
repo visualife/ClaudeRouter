@@ -29,6 +29,15 @@ Applied on every model request, after the router (or Jev) has picked. Defaults p
 
 The band's second line shows `guard ...` with the reason whenever a limit changed the pick. Budget uses the session cost the engine reports (API-equivalent USD).
 
+## Fable (v0.4.1)
+
+Fable is a model of its own, and the router never picks it automatically: it is your choice (`/model`, `pin fable` or `@fable`).
+
+- **Fable lock (default on):** when the session runs on Fable, the router passes every main-thread request through untouched (model and effort) and the band shows `fable lock`. The cost guards (budget, context cap) do not downgrade it either. `/clauderouter fable auto` turns the lock off and routes a Fable session like the others; `/clauderouter fable lock` turns it back on.
+- **Pin:** `/clauderouter pin fable [effort]` forces Fable, and `@fable:high ...` does it for one prompt. A pin also wins over the lock settings.
+- **Subagents** are still routed by their type (Explore on Haiku, others on Sonnet) unless the Agent call names a model.
+- **What went wrong before:** the router only knew haiku, sonnet and opus. A Fable id matched none of them, so each request was rewritten to `claude-sonnet-5-5` or `claude-haiku-5-5` and the band said "switched". Ids are now looked up in `MODEL_IDS` (Fable is `claude-fable-5-1`) instead of swapping a word in the running id.
+
 ## Claude desktop
 
 The mod is surface-aware: the band and pane already draw with plain `Text` bars on `desktop` (no Raster), and the tests cover both surfaces. Claude desktop's Code tab runs the same Claude Code engine, so install it there with the same two commands:
