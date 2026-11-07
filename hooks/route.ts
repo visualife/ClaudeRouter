@@ -44,7 +44,8 @@ export const MODEL_IDS: Record<Model, string> = {
 
 // The model family a full model id belongs to, or null when it names none
 export function familyOf(id: string): Model | null {
-  return KNOWN.find(f => id.includes(f)) ?? null
+  const lower = id.toLowerCase()
+  return KNOWN.find(f => lower.includes(f)) ?? null
 }
 
 // The full model id for a family. The running id is kept when it already is that family. Between haiku, sonnet

@@ -26,17 +26,20 @@ Applied on every model request, after the router (or Jev) has picked. Defaults p
 | Turn budget | $3 per turn | Over it: Sonnet medium. Over 2×: Sonnet low. A toast tells you. `/clauderouter budget 5` or `off`. |
 | Context cap | 150k tokens | Over it: Sonnet medium. Over 1.5×: Sonnet low. `/clauderouter ctx 200k` or `off`. |
 | Your choice wins | none | `/clauderouter pin sonnet medium` applies from the **next request, even mid-turn**. `pin auto` releases it. Or prefix one prompt: `@sonnet:med build the app` / `@opus:high ...`. |
+| Model locks | `fable` | A session on a locked model is left alone, subagents included. See **Model locks**. |
 
 The band's second line shows `guard ...` with the reason whenever a limit changed the pick. Budget uses the session cost the engine reports (API-equivalent USD).
 
-## Fable (v0.4.1)
+## Model locks (v0.4.1)
 
-Fable is a model of its own, and the router never picks it automatically: it is your choice (`/model`, `pin fable` or `@fable`).
+A lock tells the router to leave a model alone. When the session runs on a locked model, every request keeps the model and effort it arrived with: no rerouting, no budget or context downgrade. The band shows `<model> lock`. Fable is locked by default; the router never picks Fable by itself.
 
-- **Fable lock (default on):** when the session runs on Fable, the router passes every main-thread request through untouched (model and effort) and the band shows `fable lock`. The cost guards (budget, context cap) do not downgrade it either. `/clauderouter fable auto` turns the lock off and routes a Fable session like the others; `/clauderouter fable lock` turns it back on.
-- **Pin:** `/clauderouter pin fable [effort]` forces Fable, and `@fable:high ...` does it for one prompt. A pin also wins over the lock settings.
-- **Subagents** are still routed by their type (Explore on Haiku, others on Sonnet) unless the Agent call names a model.
-- **What went wrong before:** the router only knew haiku, sonnet and opus. A Fable id matched none of them, so each request was rewritten to `claude-sonnet-5-5` or `claude-haiku-5-5` and the band said "switched". Ids are now looked up in `MODEL_IDS` (Fable is `claude-fable-5-1`) instead of swapping a word in the running id.
+- `/clauderouter lock opus` locks a model, `/clauderouter unlock opus` releases it. `lock all` / `lock none` for every model. `/clauderouter status` lists what is locked.
+- **Subagents stay locked too.** A subagent spawned from a locked session that names no model inherits the session's model and keeps it on every request, until you unlock. A subagent whose Agent call names a model always keeps that model.
+- A model id the router does not know is never rewritten (it used to become Sonnet).
+- A pin (`/clauderouter pin <model>`) or an `@model` prompt prefix still wins over a lock.
+- `/clauderouter fable lock` and `fable auto` from 0.4.1 still work; they mean `lock fable` and `unlock fable`.
+- **What went wrong before:** the router only knew haiku, sonnet and opus. A Fable id matched none of them, so each request, main thread and subagents alike, was rewritten to `claude-sonnet-5-5` or `claude-haiku-5-5`, and the band said "switched". Ids are now looked up in `MODEL_IDS` (Fable is `claude-fable-5-1`) instead of swapping a word in the running id.
 
 ## Claude desktop
 
@@ -91,6 +94,7 @@ Set them from the prompt; they persist across reloads.
 | `/clauderouter warm 2h` | Keep the prompt cache warm for 2h (default 2h, max 6h). |
 | `/clauderouter warm off` | Stop. |
 | `/clauderouter pin <model> [effort]` / `pin auto` | Force a model (and effort), effective next request. |
+| `/clauderouter lock <model\|all\|none>` / `unlock <model\|all>` | Leave a model alone (no rerouting, no caps), subagents included. Fable is locked by default. |
 | `/clauderouter cap <effort>` | Highest effort the router may pick. |
 | `/clauderouter budget <usd\|off>` | Per-turn spend limit. |
 | `/clauderouter ctx <150k\|off>` | Context size limit. |

@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
-import type { Agent, Effort, Route, Task } from '../types'
+import type { Agent, Effort, Model, Route, Task } from '../types'
 import { JEV_TIMEOUT_MS, askJev } from './jev'
-import { DEFAULT_OPTIONS, WARM_EVERY_MS, applyArgs } from './options'
+import { DEFAULT_OPTIONS, WARM_EVERY_MS, applyArgs, normalize } from './options'
 import { EFFORTS, type Pin, directiveOf, guard } from './guard'
 import { type Els, type Snapshot, drawBand } from './band'
 import { drawPane } from './pane'
@@ -37,7 +37,8 @@ let turnPin: Pin | null = null
 let warned = false
 // When the main thread last sent a request, for keep-warm
 let lastRequestAt: number | null = null
-const subagents = new Map<string, { text: string; subagentType?: string }>()
+// explicit: the Agent call named a model. Its requests are then passed through untouched.
+const subagents = new Map<string, { text: string; subagentType?: string; explicit: boolean }>()
 // The Rasters each drawn site mounted that shimmer or move: what the timer repaints with $.ui.blit
 const mounted = new Map<string, Anim[]>()
 
@@ -106,7 +107,7 @@ export const register: Register = on => {
   on('command.run', { command: 'clauderouter' }, async ($, e) => {
     if (e.args.trim()) {
       const now = await $.clock.now()
-      const { next, text } = applyArgs(e.args, { ...DEFAULT_OPTIONS, ...(await read($, options)) }, now)
+      const { next, text } = applyArgs(e.args, normalize(await read($, options)), now)
       if (next) await update($, options, () => next)
       return { text }
     }
@@ -151,18 +152,34 @@ export const register: Register = on => {
     let pick = pickRoute(input)
     let by: Route['by'] = 'rules'
     if (!e.agentId) lastRequestAt = await $.clock.now()
-    // Options saved by an older version lack the guard fields: defaults fill them in
-    const opts = { ...DEFAULT_OPTIONS, ...(await read($, options)) }
-    // Fable lock: a main-thread session the user put on Fable is passed through untouched (model and effort),
-    // unless a pin or an "@model" prefix says otherwise. Without this, the router did not know Fable and
-    // rewrote every request to Sonnet or Haiku.
-    if (!e.agentId && opts.fableLock && familyOf(e.model) === 'fable' && !turnPin && !opts.pin) {
+    // Options saved by an older version lack the guard fields, or carry the old fableLock flag: normalize fills them in
+    const opts = normalize(await read($, options))
+    // Pass-through: the request keeps the model and effort it arrived with, and the band says why.
+    //  - model lock: a main-thread session on a locked model (Fable by default), or on an id the router does not
+    //    know, is left alone, unless a pin or an "@model" prefix says otherwise. Without this, the router did not
+    //    know Fable and rewrote every request to Sonnet or Haiku.
+    //  - a subagent whose Agent call named a model: that choice was explicit, so the router never overrides it.
+    const family = familyOf(e.model)
+    const lockMain = !e.agentId && (family === null || opts.locks.includes(family)) && !turnPin && !opts.pin
+    // A subagent is left alone when its Agent call named a model, when it inherited a locked parent's model, or
+    // when the model it runs on is itself locked
+    const lockSub = Boolean(e.agentId) && (sub?.explicit === true || (family !== null && opts.locks.includes(family)))
+    if (lockMain || lockSub) {
       const eff: Effort = EFFORTS.includes(e.effort as Effort) ? (e.effort as Effort) : 'high'
+      const shown: Model = family ?? 'fable'
       const passed = yield* next(e)
-      const locked: Route = { model: 'fable', effort: eff, conf: 1, kept: true, by: 'rules', engineModel: e.model, source: 'main', why: 'fable lock · your model choice is left as it is' }
+      const why = lockSub
+        ? (sub?.explicit ? 'agent keeps the model it was given · left as it is' : `${family} lock · agent left as it is`)
+        : `${family ?? 'unknown model'} lock · your model choice is left as it is`
+      const locked: Route = { model: shown, effort: eff, conf: 1, kept: true, by: 'rules', engineModel: e.model, source: e.agentId ? 'subagent' : 'main', why }
       await update($, route, () => locked)
-      const lockedTurn = e.turnId
-      await update($, tasks, list => patchTask(list, lockedTurn, { steps: e.index + 1, model: 'fable', effort: eff }))
+      if (e.agentId) {
+        const agentId = e.agentId
+        await update($, tasks, list => patchAgent(list, agentId, { model: shown, effort: eff }))
+      } else {
+        const lockedTurn = e.turnId
+        await update($, tasks, list => patchTask(list, lockedTurn, { steps: e.index + 1, model: shown, effort: eff }))
+      }
       return passed
     }
     if (opts.engine === 'jev') {
@@ -250,10 +267,16 @@ export const register: Register = on => {
     const pick = pickRoute({ text, tools: [], subagentType: e.subagentType })
     // Subagents never start on Opus unless they plan: execution is Sonnet or Haiku
     const spawnModel = pick.model === 'opus' && e.subagentType !== 'Plan' ? 'sonnet' : pick.model
-    const result = await next({ ...e, model: e.model ?? spawnModel })
+    // A locked session stays locked, subagents included: one that names no model inherits the parent's model
+    // (until /clauderouter unlock). A parent id the router does not know is inherited too: it is never rewritten.
+    const opts = normalize(await read($, options))
+    const parentFamily = familyOf(e.parentModel)
+    const parentLocked = parentFamily === null || opts.locks.includes(parentFamily)
+    const inherit = !e.model && parentLocked
+    const result = await next({ ...e, model: e.model ?? (inherit ? e.parentModel : spawnModel) })
     if (result.deny) return result
 
-    if (result.agentId) subagents.set(result.agentId, { text, subagentType: e.subagentType })
+    if (result.agentId) subagents.set(result.agentId, { text, subagentType: e.subagentType, explicit: Boolean(e.model) || inherit })
     const agent: Agent = {
       id: result.agentId ?? null,
       name: e.description || e.subagentType,
