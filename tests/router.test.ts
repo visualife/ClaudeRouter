@@ -313,3 +313,27 @@ test('the band has a close control: pressing it closes the band, and band full b
   expect(await back.find({ text: /Model route/ })).toBeDefined()
   await back.unmount()
 })
+
+test('the Fable bar shows the share of the session tokens that ran on Fable', async ($, on) => {
+  world(on)
+  on('turn.step', async function* (_$, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const empty = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: PLUGIN, props: PANE })
+  expect(await empty.find({ type: 'Text', text: /Fable · session/ })).toBeTruthy()
+  expect(await empty.find({ type: 'Text', text: /^no reading$/ })).toBeTruthy()
+  await empty.unmount()
+
+  // one turn on Fable (locked, passed through), one on Sonnet
+  await $.turn.start({ turnId: 't1', text: 'hello' })
+  for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-fable-5-2', effort: 'high', messageCount: 1 })) { /* drain */ }
+  await $.turn.complete({ turnId: 't1', reason: 'answer', isAborted: false, durationMs: 100, answer: '', usage: { input_tokens: 2000, output_tokens: 1000 } })
+  await $.turn.start({ turnId: 't2', text: 'write the tests' })
+  for await (const _ of $.turn.step({ turnId: 't2', index: 0, model: 'claude-sonnet-5-5', effort: 'low', messageCount: 1 })) { /* drain */ }
+  await $.turn.complete({ turnId: 't2', reason: 'answer', isAborted: false, durationMs: 100, answer: '', usage: { input_tokens: 800, output_tokens: 200 } })
+
+  const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: PLUGIN, props: PANE })
+  expect(await pane.find({ type: 'Text', text: /3k \/ 4k · 75% of session/ })).toBeTruthy()
+  await pane.unmount()
+})

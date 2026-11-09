@@ -2,7 +2,7 @@ import type { Elements, RenderElement } from 'claude-code'
 import type { JevUse, McpUse, Route, SkillUse, Task, Usage } from '../types'
 import { JEV_WINDOW } from './jev'
 import { familyOf } from './route'
-import { ACCENT, DEFAULT, type Anim, type Cell, type Role, type Tone, MINI_COLUMNS, MINI_ROWS, barLine, filledOf, miniCells, packCells, pillRows, spriteCells, SPRITE_COLUMNS, SPRITE_ROWS } from './pixel'
+import { ACCENT, DEFAULT, type Anim, type Cell, type Role, type Tone, MINI_COLUMNS, MINI_ROWS, barLine, filledOf, miniCells, miniRows, packCells, pillRows, spriteCells, SPRITE_COLUMNS, SPRITE_ROWS } from './pixel'
 import { fmtFit, fmtPct, fmtTime, fmtTokens } from './format'
 
 export type Els = Elements['terminal']
@@ -219,8 +219,23 @@ export function factRows(els: Els, t: Snapshot): RenderElement[] {
       : []),
     meterRow(els, t, '◷', 'Session · 5h', five ? `5h · ${fmtPct(five.percentUsed)} used` : 'no reading', 'session', five?.percentUsed ?? null, ACCENT.sonnet),
     meterRow(els, t, '◷', 'Weekly · 7d', week ? `7d · ${fmtPct(week.percentUsed)} used` : 'no reading', 'weekly', week?.percentUsed ?? null, ACCENT.opus),
+    fableRow(els, t),
     warmRow(els, t),
   ]
+}
+
+// Fable usage. The engine reports no Fable window of its own today (only five_hour, seven_day and a gateway spend
+// limit), so this shows what is measured here: the share of this session's tokens that ran on Fable. If a window
+// whose kind names Fable ever arrives, that reading is shown instead.
+function fableRow(els: Els, t: Snapshot): RenderElement {
+  const limit = t.usage?.rateLimits.find(r => /fable/i.test(r.kind))
+  if (limit) return meterRow(els, t, '✧', 'Fable · plan', `${fmtPct(limit.percentUsed)} used`, 'fable', limit.percentUsed, ACCENT.fable)
+  const on = (m: string | null) => m !== null && familyOf(m) === 'fable'
+  const used = t.tasks.reduce((n, task) => n + (on(task.model) ? (task.tokens ?? 0) : 0) + task.agents.reduce((k, a) => k + (on(a.model) ? a.tokens : 0), 0), 0)
+  const total = t.totals.tokens
+  const pct = total > 0 ? Math.min(100, (used / total) * 100) : null
+  const detail = pct === null ? 'no reading' : `${fmtTokens(used)} / ${fmtTokens(total)} · ${fmtPct(pct)} of session`
+  return meterRow(els, t, '✧', 'Fable · session', detail, 'fable', pct, ACCENT.fable)
 }
 
 // The keep-warm clock: time left in the window, and the countdown to the next cache ping
@@ -253,7 +268,7 @@ export function taskBar(els: Els, t: Snapshot): RenderElement[] {
   const step = running && Math.floor(t.frame / 4) % 2 === 1
   const crabEl = t.terminal
     ? els.Raster({ key: 'task-crab', columns: MINI_COLUMNS, rows: MINI_ROWS, cells: miniCells(step) })
-    : runs(els, [['▗', 0xe07a5f], ['▟', 0xe07a5f], ['█', 0xe07a5f], ['▙', 0xe07a5f], ['▖', 0xe07a5f]])
+    : block(els, miniRows(step))
   return [
     Box({
       flexDirection: 'row',
