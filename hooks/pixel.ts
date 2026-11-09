@@ -75,15 +75,17 @@ export function spriteCells(role: Role, mode: Mode, frame: number): string {
   return packCells(pixelCells(pixels(role, mode === 'run' && Math.floor(frame / 4) % 2 === 1)))
 }
 
-// The small crab for the task bar: 11 x 4 pixels, which is 2 terminal rows. The reference's shape: eyes, side arms, body, four legs.
+// The small crab for the task bar: 11 x 4 pixels, padded to 6 rows (3 terminal rows) so no leg is clipped.
+// The reference's shape: eyes, side arms, body, four legs.
 const MINI_A = ['..BEBBBEB..', 'ABBBBBBBBBA', '..BBBBBBB..', '..B.B.B.B..']
 const MINI_B = ['..BEBBBEB..', 'ABBBBBBBBBA', '..BBBBBBB..', '.B.B.B.B.B.']
 export const MINI_COLUMNS = 11
-export const MINI_ROWS = 2
+export const MINI_ROWS = 3
 export function miniCells(step: boolean): string {
   const pal: Record<string, number> = { B: 0xe07a5f, A: 0xd06e54, E: 0x1a1214 }
-  const grid = (step ? MINI_B : MINI_A).map(r => [...r].map((ch): number | null => (ch === '.' ? null : (pal[ch] ?? null))))
-  return packCells(pixelCells(grid))
+  const art = (step ? MINI_B : MINI_A).map(r => [...r].map((ch): number | null => (ch === '.' ? null : (pal[ch] ?? null))))
+  const empty = Array<number | null>(MINI_COLUMNS).fill(null)
+  return packCells(pixelCells([empty, ...art, empty]))
 }
 
 function pixelCells(px: (number | null)[][]): Cell[][] {
@@ -121,19 +123,27 @@ function hash(x: number, seed: number): number {
   return (h >>> 0) / 4294967296
 }
 
-// The texture glyph of one column: about 45% of the 8 dots, at least one and never all of them
+// The texture of one column, as in the reference: small square dots on a fine grid, a fixed pattern per column
 function texture(x: number): string {
-  let mask = 0
-  for (let bit = 0; bit < 8; bit++) if (hash(x * 8 + bit, 11) < 0.45) mask |= 1 << bit
-  if (mask === 0) mask = 0x01
-  if (mask === 0xff) mask = 0x7f
-  return String.fromCodePoint(0x2800 + mask)
+  return hash(x, 11) < 0.62 ? '▪' : '▫'
 }
 
 // The accent scaled toward black: some filled cells are a darker shade, as the reference's dots vary
 function shade(c: number, f: number): number {
   const ch = (s: number) => Math.round(((c >> s) & 0xff) * f) << s
   return ch(16) | ch(8) | ch(0)
+}
+
+// Opacity is eased, never linear. The fill is dim at its tail and brightens toward the leading edge on a power curve
+// (slow, then fast), each dot a little different. The track ahead starts dim and fades further on a smoothstep.
+const smooth = (t: number) => t * t * (3 - 2 * t)
+function fillLevel(x: number, filled: number): number {
+  const t = (x + 1) / Math.max(1, filled)
+  return Math.min(1, (0.4 + 0.6 * Math.pow(t, 2.4)) * (0.85 + 0.3 * hash(x, 3)))
+}
+function ghostLevel(x: number, filled: number, width: number): number {
+  const u = (x - filled + 1) / Math.max(1, width - filled)
+  return 0.7 - 0.45 * smooth(Math.min(1, Math.max(0, u)))
 }
 
 // How many of width cells a percent fills
@@ -146,7 +156,7 @@ export function filledOf(width: number, pct: number | null): number {
 export function barCells(width: number, _frame: number, tone: Tone, pct: number | null, accent: number): Cell[] {
   const color = tone === 'fail' ? ACCENT.fail : accent
   const filled = filledOf(width, pct)
-  return Array.from({ length: width }, (_, x): Cell => [texture(x), x >= filled ? GHOST : hash(x, 3) < 0.35 ? shade(color, 0.6) : color])
+  return Array.from({ length: width }, (_, x): Cell => [texture(x), x >= filled ? shade(GHOST, ghostLevel(x, filled, width)) : shade(color, fillLevel(x, filled))])
 }
 
 // The "Tasks 2/4" capsule: dark text on the accent, sitting at the edge of the fill (centred when no position is given)
