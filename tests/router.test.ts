@@ -159,7 +159,8 @@ test('while a turn runs the terminal repaints its shimmering bars with $.ui.blit
   const keys = new Set(blits.map(b => b.key))
   // Only the crabs move; bars are static and show the real value, so none is repainted
   expect(keys.has('crab-t1')).toBe(true)
-  expect([...keys].some(k => k.startsWith('row-') || k.startsWith('task'))).toBe(false)
+  expect(keys.has('task-crab')).toBe(true)
+  expect([...keys].some(k => k.startsWith('row-') || k.startsWith('taskbar-') || k.startsWith('task-t'))).toBe(false)
   expect(blits.every(b => b.requestId === PLUGIN)).toBe(true)
 
   // Nothing is repainted once the turn is over

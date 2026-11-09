@@ -88,7 +88,7 @@ export const register: Register = on => {
       }
       for (const [requestId, list] of mounted) {
         for (const a of list) {
-          if (a.kind === 'sprite' && frame % 4 !== 0) continue
+          if (frame % 4 !== 0) continue
           await $.ui.blit({ requestId, key: a.key, cells: animCells(a, frame) })
         }
       }

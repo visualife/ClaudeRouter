@@ -2,7 +2,7 @@ import type { Elements, RenderElement } from 'claude-code'
 import type { JevUse, McpUse, Route, SkillUse, Task, Usage } from '../types'
 import { JEV_WINDOW } from './jev'
 import { familyOf } from './route'
-import { ACCENT, type Anim, type Role, type Tone, MINI_CRAB, barCells, packCells, spriteCells, withPill, SPRITE_COLUMNS, SPRITE_ROWS } from './pixel'
+import { ACCENT, type Anim, type Role, type Tone, MINI_COLUMNS, MINI_ROWS, barCells, filledOf, miniCells, packCells, spriteCells, withPill, SPRITE_COLUMNS, SPRITE_ROWS } from './pixel'
 import { fmtFit, fmtPct, fmtTime, fmtTokens } from './format'
 
 export type Els = Elements['terminal']
@@ -47,7 +47,8 @@ export function accentOf(model: string | null): number {
 // A running bar with no total (pct null) shimmers; the terminal's timer repaints it with $.ui.blit.
 export function bar(els: Els, key: string, t: Snapshot, width: number, tone: Tone, pct: number | null, accent: number, label?: string): RenderElement {
   const dots = barCells(width, t.frame, tone, pct, accent)
-  const cells = label ? withPill(dots, label, accent) : dots
+  // The capsule rides the edge of the fill: left at 0%, further right as the value grows
+  const cells = label ? withPill(dots, label, accent, filledOf(width, pct)) : dots
   if (!t.terminal) {
     // The desktop has no Raster: the same dots as text, in the tone's theme colour
     const color = tone === 'fail' ? 'error' : tone === 'done' ? 'success' : pct === null ? 'suggestion' : 'warning'
@@ -224,12 +225,16 @@ export function taskBar(els: Els, t: Snapshot): RenderElement[] {
   const label = total > 0 ? `Tasks ${done}/${total}` : task.status === 'running' ? `step ${task.steps}` : 'done'
   const accent = accentOf(task.model)
   const width = Math.max(12, Math.min(40, t.columns - 52))
+  const running = task.status === 'running'
+  if (t.terminal && running) t.anim.push({ key: 'task-crab', kind: 'mini' })
+  // The reference crab; the desktop has no Raster, so it gets a two-row block version
   const crabEl = t.terminal
-    ? els.Raster({ key: 'task-crab', columns: MINI_CRAB.length, rows: 1, cells: packCells([MINI_CRAB]) })
-    : Text({ children: ['▝▟█▙▘'], color: 'claude' })
+    ? els.Raster({ key: 'task-crab', columns: MINI_COLUMNS, rows: MINI_ROWS, cells: miniCells(running && Math.floor(t.frame / 4) % 2 === 1) })
+    : Box({ flexDirection: 'column', children: [Text({ children: ['▟▀█▀▙'], color: 'claude' }), Text({ children: ['▝▘▝▘▝'], color: 'claude' })] })
   return [
     Box({
       flexDirection: 'row',
+      alignItems: 'center',
       columnGap: 2,
       children: [
         Box({
