@@ -27,10 +27,23 @@ test('a known percent leaves the rest of the track faint, and the dots thicken t
   expect(right).toBeGreaterThan(left)
 })
 
-test('a shimmering bar changes with the frame, a finished one does not', () => {
-  const at = (tone: 'run' | 'done', frame: number) => barCells(30, frame, tone, null, ACCENT.sonnet).map(c => c[0]).join('')
-  expect(at('run', 0)).not.toBe(at('run', 8))
-  expect(at('done', 0)).toBe(at('done', 8))
+test('nothing moves: a bar is the same on every frame, and the fill is the value', () => {
+  const at = (pct: number | null, frame: number) => barCells(30, frame, 'run', pct, ACCENT.sonnet).map(c => c[0]).join('')
+  expect(at(40, 0)).toBe(at(40, 8))
+  expect(at(null, 0)).toBe(at(null, 8))
+  // no reading: an empty track; a reading fills that share
+  const lit = (pct: number | null) => barCells(30, 0, 'run', pct, ACCENT.sonnet).filter(c => c[1] !== ACCENT.track).length
+  expect(lit(null)).toBe(0)
+  expect(lit(0)).toBe(0)
+  expect(lit(50)).toBe(15)
+  expect(lit(100)).toBe(30)
+})
+
+test('a finished or failed bar still shows its value; failed is red', () => {
+  const done = barCells(20, 0, 'done', 25, ACCENT.sonnet)
+  expect(done.filter(c => c[1] !== ACCENT.track).length).toBe(5)
+  const fail = barCells(20, 0, 'fail', 100, ACCENT.sonnet)
+  expect(fail.every(c => c[1] === ACCENT.fail || c[1] !== ACCENT.sonnet)).toBe(true)
 })
 
 test('the pill sits in the middle of a bar and keeps its width', () => {

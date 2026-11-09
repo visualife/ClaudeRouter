@@ -4,7 +4,7 @@ import type { Agent, Effort, Model, Route, Task } from '../types'
 import { JEV_TIMEOUT_MS, askJev } from './jev'
 import { DEFAULT_OPTIONS, WARM_EVERY_MS, applyArgs, normalize } from './options'
 import { EFFORTS, type Pin, directiveOf, guard } from './guard'
-import { type Els, type Snapshot, drawStrip } from './band'
+import { type Els, type Snapshot, drawBand, drawStrip } from './band'
 import { drawPane } from './pane'
 import { type Anim, animCells } from './pixel'
 import { effortFor, familyOf, idFor, pickRoute, roleOf, whyOf } from './route'
@@ -329,7 +329,8 @@ export const register: Register = on => {
     if (e.props.hasSurvey) return next(e)
     const snap = await snapshot($, e.surface, e.props.bodyColumns, e.props.maxRows)
     terminal = snap.terminal
-    const tree = drawStrip($.ui.resolve(e) as Els, snap)
+    const { band } = normalize(await read($, options))
+    const tree = band === 'route' ? drawStrip($.ui.resolve(e) as Els, snap) : drawBand($.ui.resolve(e) as Els, snap)
     mounted.set(e.requestId, snap.anim)
     return tree
   })

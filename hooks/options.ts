@@ -12,6 +12,7 @@ export const DEFAULT_OPTIONS: Options = {
   ctxCap: 150_000,
   // A session on a locked model is left alone: no rerouting, no caps. Fable is locked by default.
   locks: ['fable'],
+  band: 'full',
 }
 export const ALL_MODELS: Model[] = ['haiku', 'sonnet', 'opus', 'fable']
 const isModel = (s: string): s is Model => (ALL_MODELS as string[]).includes(s)
@@ -41,6 +42,7 @@ export const USAGE = [
   '/clauderouter cap high        highest effort the router may pick by itself (default high)',
   '/clauderouter budget 3        USD one turn may spend before it is downgraded (off = no limit)',
   '/clauderouter ctx 150k        context size above which requests are downgraded (off = no limit)',
+  '/clauderouter band route      band above the prompt: task bar and model route only (full = every row)',
   '/clauderouter status          show the current options',
   'Prompt prefix: "@sonnet:med ..." pins that one turn.',
 ].join('\n')
@@ -129,6 +131,11 @@ export function applyArgs(args: string, o: Options, now: number): { next: Option
       const tokens = parseTokens(arg)
       if (tokens === null) return { next: null, text: `ctx takes a size like 150k, or off\n${USAGE}` }
       return { next: { ...o, ctxCap: tokens }, text: tokens > 0 ? `context cap: ${Math.round(tokens / 1000)}k` : 'context cap: off' }
+    }
+    case 'band': {
+      const mode = arg.trim().toLowerCase()
+      if (mode !== 'full' && mode !== 'route') return { next: null, text: `band takes full or route\n${USAGE}` }
+      return { next: { ...o, band: mode }, text: `band: ${mode}` }
     }
     case 'status':
       return { next: null, text: describe(o, now) }

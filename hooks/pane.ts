@@ -78,7 +78,8 @@ function rowView(els: Els, t: Snapshot, r: Row, crabs: boolean): RenderElement {
         flexDirection: 'row',
         columnGap: 1,
         children: [
-          bar(els, `row-${r.key}`, t, Math.max(8, Math.min(36, t.columns - (crabs ? 52 : 30))), toneOf(r.status), null, accentOf(r.model)),
+          // The real value: this row's share of the session's tokens
+          bar(els, `row-${r.key}`, t, Math.max(8, Math.min(36, t.columns - (crabs ? 52 : 30))), toneOf(r.status), r.tokens !== null && t.totals.tokens > 0 ? (r.tokens / t.totals.tokens) * 100 : null, accentOf(r.model)),
           Text({ children: [`ctx ${r.ctx} · ${r.tokens === null ? '—' : fmtTokens(r.tokens)} · ${fmtTime(seconds)}`], color: 'subtle' }),
           Text({ children: [mark], color: r.status === 'failed' ? 'error' : running ? 'claude' : 'success' }),
         ],

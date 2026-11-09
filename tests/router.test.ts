@@ -110,16 +110,26 @@ for (const surface of ['terminal', 'desktop'] as const) {
     })
 
     const band = await $.ui.mount({ plugin: PLUGIN, surface, component: 'AbovePrompt', props: BAND })
-    // The band above the prompt is only the route; the dashboard is in the pane
+    // The band above the prompt is full by default: every row of info is back
+    expect(await band.find({ text: /ClaudeRouter/ })).toBeDefined()
     expect(await band.find({ text: /Model route/ })).toBeDefined()
-    expect(await band.find({ text: /\/clauderouter/ })).toBeDefined()
-    // The task bar: name, pill, percent and the agent count
-    expect(await band.find({ text: /×1/ })).toBeDefined()
-    // The pill is text on the desktop and cells inside the Raster on the terminal
-    if (surface === 'desktop') expect(await band.find({ text: /Tasks 0\/1/ })).toBeDefined()
-    else expect((await band.findAll({ type: 'Raster' })).length).toBeGreaterThan(0)
-    expect(await band.find({ text: /Weekly/ })).toBeUndefined()
+    expect(await band.find({ text: /0\/1 agents/ })).toBeDefined()
+    expect(await band.find({ text: /Map the routes/ })).toBeDefined()
+    expect(await band.find({ text: /Skills/ })).toBeDefined()
+    expect(await band.find({ text: /Weekly/ })).toBeDefined()
+    expect(await band.find({ text: /Keep warm/ })).toBeDefined()
     await band.unmount()
+
+    // `band route`: only the task bar and the model route stay above the prompt
+    await $.command.run({ command: 'clauderouter', args: 'band route', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+    const slim = await $.ui.mount({ plugin: PLUGIN, surface, component: 'AbovePrompt', props: BAND })
+    expect(await slim.find({ text: /Model route/ })).toBeDefined()
+    expect(await slim.find({ text: /×1/ })).toBeDefined()
+    // The pill is text on the desktop and cells inside the Raster on the terminal
+    if (surface === 'desktop') expect(await slim.find({ text: /Tasks 0\/1/ })).toBeDefined()
+    else expect((await slim.findAll({ type: 'Raster' })).length).toBeGreaterThan(0)
+    expect(await slim.find({ text: /Weekly/ })).toBeUndefined()
+    await slim.unmount()
 
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', requestId: PLUGIN, props: PANE })
     expect(await pane.find({ text: /Running · 2/ })).toBeDefined()
@@ -147,10 +157,9 @@ test('while a turn runs the terminal repaints its shimmering bars with $.ui.blit
 
   await clock.advance(400)
   const keys = new Set(blits.map(b => b.key))
-  expect(keys.has('row-t1')).toBe(true)
+  // Only the crabs move; bars are static and show the real value, so none is repainted
   expect(keys.has('crab-t1')).toBe(true)
-  // A bar of 36 cells is 36 triplets of 4 bytes: 432 bytes, 576 base64 characters
-  expect(blits.find(b => b.key === 'row-t1')?.cells.length).toBe(576)
+  expect([...keys].some(k => k.startsWith('row-') || k.startsWith('task'))).toBe(false)
   expect(blits.every(b => b.requestId === PLUGIN)).toBe(true)
 
   // Nothing is repainted once the turn is over

@@ -53,8 +53,14 @@ export function bar(els: Els, key: string, t: Snapshot, width: number, tone: Ton
     const color = tone === 'fail' ? 'error' : tone === 'done' ? 'success' : pct === null ? 'suggestion' : 'warning'
     return els.Text({ children: [cells.map(c => c[0]).join('')], color })
   }
-  if (tone === 'run' && pct === null) t.anim.push({ key, kind: 'bar', width, accent, ...(label ? { label } : {}) })
   return els.Raster({ key, columns: width, rows: 1, cells: packCells([cells]) })
+}
+
+// How far a task is, from what is measured: finished subagents over all of them; a finished task is 100%;
+// a running one with no subagents has no reading yet, so its bar stays an empty track
+export function taskPct(task: Task): number | null {
+  if (task.status !== 'running') return 100
+  return task.agents.length > 0 ? (task.agents.filter(a => a.status !== 'running').length / task.agents.length) * 100 : null
 }
 
 export function toneOf(status: Task['status']): Tone {
@@ -136,7 +142,7 @@ function taskRows(els: Els, t: Snapshot, task: Task): RenderElement[] {
       width: LABEL,
       children: [Text({ children: [`● ${fmtFit(task.name, LABEL - 3)}`], bold: true, color: task.status === 'failed' ? 'error' : 'text' })],
     }),
-    bar(els, `task-${task.id}`, t, barWidth(t), toneOf(task.status), null, accentOf(task.model)),
+    bar(els, `task-${task.id}`, t, barWidth(t), toneOf(task.status), taskPct(task), accentOf(task.model)),
     Text({ children: [status], color: 'subtle' }),
     ...(task.agents.length > 0 ? [Text({ children: [`${done}/${task.agents.length} agents`] })] : []),
   ])
@@ -214,7 +220,7 @@ export function taskBar(els: Els, t: Snapshot): RenderElement[] {
   if (!task) return []
   const total = task.agents.length
   const done = task.agents.filter(a => a.status !== 'running').length
-  const pct = task.status === 'running' ? (total > 0 ? (done / total) * 100 : null) : 100
+  const pct = taskPct(task)
   const label = total > 0 ? `Tasks ${done}/${total}` : task.status === 'running' ? `step ${task.steps}` : 'done'
   const accent = accentOf(task.model)
   const width = Math.max(12, Math.min(40, t.columns - 52))

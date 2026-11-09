@@ -43,7 +43,9 @@ A lock tells the router to leave a model alone. When the session runs on a locke
 
 ## Dashboard pane (v0.4.2)
 
-The full dashboard is the `/clauderouter` pane: cost, tokens and time, skills, MCP, plugins, context, 5h / 7d usage, the **Keep warm** clock (time left in the window and the countdown to the next ping), and the running and finished agents. It opens at session start, 24 rows tall. Drag or resize it with the engine's pane controls, or dock it beside the chat on a wide terminal, so it does not cover the conversation. The band above the prompt is now the **task bar** (● task name, a bar with a `Tasks 2/4` pill, the percent, a small crab and the agent count) over the model route line. Every bar is a field of scattered braille dots that thickens toward its leading edge, with a few brighter sparks; none is ever a solid fill. The Jev chip is pink.
+The full dashboard is the `/clauderouter` pane: cost, tokens and time, skills, MCP, plugins, context, 5h / 7d usage, the **Keep warm** clock (time left in the window and the countdown to the next ping), and the running and finished agents. It opens at session start, 24 rows tall. Drag or resize it with the engine's pane controls, or dock it beside the chat on a wide terminal, so it does not cover the conversation. The band above the prompt shows every row again (route, agents, skills, MCP, plugins, context, 5h / 7d, keep-warm). Claude Code places and sizes that band, so a mod cannot make it draggable; only the pane drags. To keep the chat clear, `/clauderouter band route` shrinks the band to the **task bar** (● task name, a bar with a `Tasks 2/4` pill, the percent, a small crab and the agent count) over the model route line, and `/clauderouter band full` brings every row back. Claude Code's own collapse (`[-]`, ctrl+x ctrl+a) also works on it.
+
+**Bars show real values and never move.** Each is a dot field filled to the measured share: context, 5h and 7d are their percent; a task is its finished subagents over all of them; a row in the pane is its share of the session's tokens. No reading yet means an empty faint track. Nothing is a solid fill, and nothing shimmers. The Jev chip is pink.
 
 ## Models (v0.4.2)
 
@@ -113,6 +115,7 @@ Set them from the prompt; they persist across reloads.
 | `/clauderouter cap <effort>` | Highest effort the router may pick. |
 | `/clauderouter budget <usd\|off>` | Per-turn spend limit. |
 | `/clauderouter ctx <150k\|off>` | Context size limit. |
+| `/clauderouter band <full\|route>` | Band above the prompt: every row, or only the task bar and the model route. |
 | `/clauderouter status` | Show the current options. |
 
 **Jev**: it only chooses the tier; Claude still does the work. Each routed request sends the prompt text (first 4000 characters) to `api.typesafe.ai` and costs one small Jev call (about 0.3 s). In the band, `jev` sits beside `haiku sonnet opus` on the Model route row: lit when Jev made the pick, dim when the rules did. Once Jev has been used, a `Jev · context` bar appears: the last call's input tokens against Jev's 64k per-request window, with the call count. A Jev pick also starts the band's second line with `jev ·`. With no key, an error or a 2.5 s timeout, the rules decide, so nothing blocks.

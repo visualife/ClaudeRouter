@@ -21,6 +21,8 @@ export type Options = {
   // Locked models: when the session runs on one of them, its requests are passed through untouched (no rerouting,
   // no caps), unless a pin or an "@model" prefix says otherwise. An id the router does not know is always passed through.
   locks: Model[]
+  // The band above the prompt: 'full' shows every row, 'route' only the task bar and the model route
+  band: 'full' | 'route'
 }
 
 // The latest routing decision, for the main conversation or one subagent request

@@ -124,20 +124,13 @@ function sparkle(x: number, seed: number, d: number, accent: number): Cell {
 
 // One row of a bar in an accent colour. A known percent fills to it, thickening toward the edge; 'run' with
 // none shimmers (twinkling dots with a brighter head sweeping through); 'done' and 'fail' are a still sparkle field.
-export function barCells(width: number, frame: number, tone: Tone, pct: number | null, accent: number): Cell[] {
-  const ramp = (x: number) => 0.3 + 0.5 * ((x + 1) / width)
-  if (tone === 'fail') return Array.from({ length: width }, (_, x): Cell => sparkle(x, 0, ramp(x), ACCENT.fail))
-  if (tone === 'done') return Array.from({ length: width }, (_, x): Cell => sparkle(x, 0, ramp(x), accent))
-  if (pct !== null) {
-    const filled = Math.round((Math.min(100, Math.max(0, pct)) / 100) * width)
-    return Array.from({ length: width }, (_, x): Cell => (x >= filled ? TRACK : sparkle(x, 0, 0.2 + 0.7 * ((x + 1) / filled), accent)))
-  }
-  const head = (frame % (width + 6)) - 3
-  const seed = Math.floor(frame / 2)
-  return Array.from({ length: width }, (_, x): Cell => {
-    const d = x - head
-    return d >= 0 && d < 3 ? sparkle(x, seed, 0.95, lighten(accent)) : sparkle(x, seed, 0.45, accent)
-  })
+// Static: the bars show the real value, and nothing moves. With no reading yet, a faint field and no fill.
+export function barCells(width: number, _frame: number, tone: Tone, pct: number | null, accent: number): Cell[] {
+  // The tone only colours the fill (a failed one is red); how much is filled is always the value
+  const color = tone === 'fail' ? ACCENT.fail : accent
+  if (pct === null) return Array.from({ length: width }, (): Cell => TRACK)
+  const filled = Math.round((Math.min(100, Math.max(0, pct)) / 100) * width)
+  return Array.from({ length: width }, (_, x): Cell => (x >= filled ? TRACK : sparkle(x, 0, 0.2 + 0.7 * ((x + 1) / filled), color)))
 }
 
 // A label drawn over the middle of a bar, like the "Tasks 2/4" pill: dark text on the accent
