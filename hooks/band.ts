@@ -2,7 +2,7 @@ import type { Elements, RenderElement } from 'claude-code'
 import type { JevUse, McpUse, Route, SkillUse, Task, Usage } from '../types'
 import { JEV_WINDOW } from './jev'
 import { familyOf } from './route'
-import { ACCENT, BAR_ROWS, DEFAULT, type Anim, type Cell, type Role, type Tone, MINI_COLUMNS, MINI_ROWS, barRows, miniCells, miniRows, packCells, spriteCells, SPRITE_COLUMNS, SPRITE_ROWS } from './pixel'
+import { ACCENT, DEFAULT, type Anim, type Cell, type Role, type Tone, MINI_COLUMNS, MINI_ROWS, barLine, filledOf, miniCells, packCells, pillRows, spriteCells, SPRITE_COLUMNS, SPRITE_ROWS } from './pixel'
 import { fmtFit, fmtPct, fmtTime, fmtTokens } from './format'
 
 export type Els = Elements['terminal']
@@ -47,7 +47,7 @@ const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`
 
 // One terminal row of cells as Text runs, one Text per stretch of cells sharing their colours: the desktop has no
 // Raster, so its pixels are half-block characters with a foreground and a background colour
-function runs(els: Els, cells: Cell[]): RenderElement {
+function runs(els: Els, cells: Cell[], small = true): RenderElement {
   const out: RenderElement[] = []
   let i = 0
   while (i < cells.length) {
@@ -59,8 +59,8 @@ function runs(els: Els, cells: Cell[]): RenderElement {
       text += cells[j]?.[0] ?? ' '
       j += 1
     }
-    // caption: the desktop's smallest text size, so each pixel is small and the bars and crab stay compact
-    out.push(els.Text({ children: [text], size: 'caption', ...(fg !== DEFAULT ? { color: hex(fg) } : {}), ...(bg !== undefined && bg !== DEFAULT ? { backgroundColor: hex(bg) } : {}) }))
+    // caption: the small text size, used for the crab; bars pass small = false and keep the normal size
+    out.push(els.Text({ children: [text], ...(small ? { size: 'caption' as const } : {}), ...(fg !== DEFAULT ? { color: hex(fg) } : {}), ...(bg !== undefined && bg !== DEFAULT ? { backgroundColor: hex(bg) } : {}) }))
     i = j
   }
   return els.Box({ flexDirection: 'row', children: out })
@@ -70,11 +70,13 @@ function block(els: Els, rows: Cell[][]): RenderElement {
   return els.Box({ flexDirection: 'column', children: rows.map(r => runs(els, r)) })
 }
 
-// A bar: several rows of small square pixels, as in the reference. A Raster in the terminal, Text runs on the
+// A bar: one text line tall with a 4-row braille dot matrix inside it, as in the reference. A Raster in the terminal, Text runs on the
 // desktop. It shows the value and never moves; a label becomes the capsule at the edge of the fill.
-export function bar(els: Els, key: string, t: Snapshot, width: number, tone: Tone, pct: number | null, accent: number, label?: string, rows = BAR_ROWS): RenderElement {
-  const grid = barRows(width, rows, tone, pct, accent, label)
-  return t.terminal ? els.Raster({ key, columns: width, rows, cells: packCells(grid) }) : block(els, grid)
+export function bar(els: Els, key: string, t: Snapshot, width: number, tone: Tone, pct: number | null, accent: number, label?: string): RenderElement {
+  const line = barLine(width, tone, pct, accent)
+  const cells = label ? (pillRows([line], label, accent, filledOf(width, pct))[0] ?? line) : line
+  // One line tall on both surfaces: the Raster in the terminal, Text runs at the normal size on the desktop
+  return t.terminal ? els.Raster({ key, columns: width, rows: 1, cells: packCells([cells]) }) : runs(els, cells, false)
 }
 
 // How far a task is, from what is measured: finished subagents over all of them; a finished task is 100%;
@@ -251,7 +253,7 @@ export function taskBar(els: Els, t: Snapshot): RenderElement[] {
   const step = running && Math.floor(t.frame / 4) % 2 === 1
   const crabEl = t.terminal
     ? els.Raster({ key: 'task-crab', columns: MINI_COLUMNS, rows: MINI_ROWS, cells: miniCells(step) })
-    : block(els, miniRows(step))
+    : runs(els, [['▗', 0xe07a5f], ['▟', 0xe07a5f], ['█', 0xe07a5f], ['▙', 0xe07a5f], ['▖', 0xe07a5f]])
   return [
     Box({
       flexDirection: 'row',
@@ -264,7 +266,7 @@ export function taskBar(els: Els, t: Snapshot): RenderElement[] {
           columnGap: 1,
           children: [Text({ children: ['●'], color: MODEL_TONE[familyOf(task.model ?? '') ?? 'sonnet'] }), Text({ children: [fmtFit(task.name, 17)], bold: true })],
         }),
-        bar(els, `taskbar-${task.id}`, t, width, toneOf(task.status), pct, accent, label, BAR_ROWS + 1),
+        bar(els, `taskbar-${task.id}`, t, width, toneOf(task.status), pct, accent, label),
         Text({ children: [pct === null ? '…' : fmtPct(pct)], color: 'subtle' }),
         crabEl,
         Text({ children: [`×${Math.max(1, total)}`], bold: true }),

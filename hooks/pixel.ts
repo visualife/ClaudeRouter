@@ -166,8 +166,26 @@ export function barRows(width: number, rows: number, tone: Tone, pct: number | n
   return label ? pillRows(grid, label, accent, filled) : grid
 }
 
+// The bar as the reference draws it: one text line tall, with several rows of tiny dots inside it. A braille character
+// is a 2 x 4 grid of dots, so a single line holds a 4-row dot matrix. Each column has a fixed random subset lit (about
+// half, never none and never all), the same on every bar. The fill is that texture in the accent with the eased
+// shades, the track ahead the same texture very dim.
+function dotsAt(x: number): string {
+  let mask = 0
+  for (let bit = 0; bit < 8; bit++) if (hash(x * 8 + bit, 11) < 0.5) mask |= 1 << bit
+  if (mask === 0) mask = 0x01
+  if (mask === 0xff) mask = 0x7f
+  return String.fromCodePoint(0x2800 + mask)
+}
+
+export function barLine(width: number, tone: Tone, pct: number | null, accent: number): Cell[] {
+  const color = tone === 'fail' ? ACCENT.fail : accent
+  const filled = filledOf(width, pct)
+  return Array.from({ length: width }, (_, x): Cell => [dotsAt(x), x >= filled ? shade(GHOST, snap(ghostLevel(x, filled, width))) : shade(color, snap(fillLevel(x, 0, filled)))])
+}
+
 // The "Tasks 2/4" capsule: dark text on the accent, full height, riding the edge of the fill and held inside the bar
-function pillRows(grid: Cell[][], text: string, accent: number, at: number): Cell[][] {
+export function pillRows(grid: Cell[][], text: string, accent: number, at: number): Cell[][] {
   const label = ` ${text} `
   const width = grid[0]?.length ?? 0
   if (label.length + 2 > width) return grid
