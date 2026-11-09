@@ -4,7 +4,7 @@ import type { Agent, Effort, Model, Route, Task } from '../types'
 import { JEV_TIMEOUT_MS, askJev } from './jev'
 import { DEFAULT_OPTIONS, WARM_EVERY_MS, applyArgs, normalize } from './options'
 import { EFFORTS, type Pin, directiveOf, guard } from './guard'
-import { type Els, type Snapshot, drawBand } from './band'
+import { type Els, type Snapshot, drawStrip } from './band'
 import { drawPane } from './pane'
 import { type Anim, animCells } from './pixel'
 import { effortFor, familyOf, idFor, pickRoute, roleOf, whyOf } from './route'
@@ -44,7 +44,10 @@ const mounted = new Map<string, Anim[]>()
 
 // Gathers what a drawing reads. The validator follows $ only into functions declared at the top of the file.
 async function snapshot($: EngineInterface, surface: string, columns: number, rows: number): Promise<Snapshot> {
+  const now = await $.clock.now()
+  const { warmUntil } = normalize(await read($, options))
   return {
+    warm: warmUntil > now ? { until: warmUntil, pingAt: lastRequestAt === null ? null : lastRequestAt + WARM_EVERY_MS } : null,
     route: await read($, route),
     tasks: await read($, tasks),
     skills: await read($, skills),
@@ -53,7 +56,7 @@ async function snapshot($: EngineInterface, surface: string, columns: number, ro
     usage: await read($, usage),
     jev: await read($, jev),
     totals: await read($, totals),
-    now: await $.clock.now(),
+    now,
     frame,
     terminal: surface === 'terminal',
     columns,
@@ -70,6 +73,8 @@ export const register: Register = on => {
       description: 'Open ClaudeRouter: cost, tokens, time, running and finished agents',
       immediate: true,
     })
+    // The dashboard opens as a pane, taller than the default and draggable by the person; the band above the prompt keeps the route only
+    void $.ui.open({ id: PANE, title: 'ClaudeRouter', rows: 24, closeOnEscape: true }).catch(() => undefined)
     const raw = await $.session.usage()
     await update($, usage, () => toUsage(raw))
     // Ten frames a second, and only while a turn is running
@@ -94,6 +99,8 @@ export const register: Register = on => {
     $.clock.every(60_000, async () => {
       const now = await $.clock.now()
       const { warmUntil } = await read($, options)
+      // The clock row counts in minutes: redraw once a minute while a window is open
+      if (warmUntil > now) $.ui.invalidate('ui.render')
       if (warmUntil <= now || busy || lastRequestAt === null || now - lastRequestAt < WARM_EVERY_MS) return
       const reply = await $.model.fork({ prompt: 'Reply with the single word: warm' }).catch(() => null)
       // A failed ping ends the window: the cache is probably gone, and retrying would only pay to write it again
@@ -111,7 +118,7 @@ export const register: Register = on => {
       if (next) await update($, options, () => next)
       return { text }
     }
-    await $.ui.open({ id: PANE, title: 'ClaudeRouter', closeOnEscape: true })
+    await $.ui.open({ id: PANE, title: 'ClaudeRouter', rows: 24, closeOnEscape: true })
     return {}
   })
 
@@ -322,7 +329,7 @@ export const register: Register = on => {
     if (e.props.hasSurvey) return next(e)
     const snap = await snapshot($, e.surface, e.props.bodyColumns, e.props.maxRows)
     terminal = snap.terminal
-    const tree = drawBand($.ui.resolve(e) as Els, snap)
+    const tree = drawStrip($.ui.resolve(e) as Els, snap)
     mounted.set(e.requestId, snap.anim)
     return tree
   })

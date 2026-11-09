@@ -110,19 +110,21 @@ for (const surface of ['terminal', 'desktop'] as const) {
     })
 
     const band = await $.ui.mount({ plugin: PLUGIN, surface, component: 'AbovePrompt', props: BAND })
-    expect(await band.find({ text: /ClaudeRouter/ })).toBeDefined()
+    // The band above the prompt is only the route; the dashboard is in the pane
     expect(await band.find({ text: /Model route/ })).toBeDefined()
-    expect(await band.find({ text: /0\/1 agents/ })).toBeDefined()
-    expect(await band.find({ text: /Map the routes/ })).toBeDefined()
-    expect(await band.find({ text: /Weekly/ })).toBeDefined()
-    // Raster is the terminal's alone: the desktop draws its bars as Text
-    expect((await band.findAll({ type: 'Raster' })).length > 0).toBe(surface === 'terminal')
+    expect(await band.find({ text: /\/clauderouter/ })).toBeDefined()
+    expect(await band.find({ text: /Weekly/ })).toBeUndefined()
     await band.unmount()
 
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', requestId: PLUGIN, props: PANE })
     expect(await pane.find({ text: /Running · 2/ })).toBeDefined()
     expect(await pane.find({ text: /Finished · 0/ })).toBeDefined()
     expect(await pane.find({ text: /Cost/ })).toBeDefined()
+    expect(await pane.find({ text: /Map the routes/ })).toBeDefined()
+    expect(await pane.find({ text: /Weekly/ })).toBeDefined()
+    expect(await pane.find({ text: /Skills/ })).toBeDefined()
+    // Raster is the terminal's alone: the desktop draws its bars as Text
+    expect((await pane.findAll({ type: 'Raster' })).length > 0).toBe(surface === 'terminal')
     await pane.unmount()
   })
 }
@@ -136,15 +138,15 @@ test('while a turn runs the terminal repaints its shimmering bars with $.ui.blit
   })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.turn.start({ turnId: 't1', text: 'plan the architecture' })
-  const band = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'AbovePrompt', requestId: 'band', props: BAND })
+  const band = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', requestId: PLUGIN, props: PANE })
 
   await clock.advance(400)
   const keys = new Set(blits.map(b => b.key))
-  expect(keys.has('task-t1')).toBe(true)
-  expect(keys.has('crab-router')).toBe(true)
-  // A bar of 30 cells is 30 triplets of 4 bytes: 360 bytes, 480 base64 characters
-  expect(blits.find(b => b.key === 'task-t1')?.cells.length).toBe(480)
-  expect(blits.every(b => b.requestId === 'band')).toBe(true)
+  expect(keys.has('row-t1')).toBe(true)
+  expect(keys.has('crab-t1')).toBe(true)
+  // A bar of 36 cells is 36 triplets of 4 bytes: 432 bytes, 576 base64 characters
+  expect(blits.find(b => b.key === 'row-t1')?.cells.length).toBe(576)
+  expect(blits.every(b => b.requestId === PLUGIN)).toBe(true)
 
   // Nothing is repainted once the turn is over
   await $.turn.complete({ turnId: 't1', reason: 'answer', isAborted: false, durationMs: 300, answer: '' })
@@ -258,8 +260,21 @@ test('with the Jev engine the band lights jev and draws its context bar', async 
   await $.command.run({ command: 'clauderouter', args: 'engine jev', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
   await $.turn.start({ turnId: 't1', text: 'list the files' })
   for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-sonnet-5-5', effort: 'low', messageCount: 1 })) { /* drain */ }
-  const band = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'AbovePrompt', requestId: 'band', props: BAND })
+  const band = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: PLUGIN, props: PANE })
   expect((await band.find({ type: 'Text', text: /Jev · context/ }))).toBeTruthy()
   expect((await band.find({ type: 'Text', text: /16k \/ 64k · 25% · 1 calls/ }))).toBeTruthy()
   await band.unmount()
+})
+
+test('the pane shows the keep-warm clock: off by default, a countdown once a window is open', async ($, on) => {
+  world(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const off = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: PLUGIN, props: PANE })
+  expect(await off.find({ type: 'Text', text: /off · \/clauderouter warm 2h/ })).toBeTruthy()
+  await off.unmount()
+
+  await $.command.run({ command: 'clauderouter', args: 'warm 2h', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  const onPane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: PLUGIN, props: PANE })
+  expect(await onPane.find({ type: 'Text', text: /on · 1(19|20):\d\d left · first ping 50 min after your next request/ })).toBeTruthy()
+  await onPane.unmount()
 })

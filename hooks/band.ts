@@ -19,6 +19,8 @@ export type Snapshot = {
   jev: JevUse | null
   totals: { tokens: number; turns: number }
   now: number
+  // Keep-warm window: when it ends and when the next ping is due (null until the first request); null while off
+  warm: { until: number; pingAt: number | null } | null
   frame: number
   terminal: boolean
   columns: number
@@ -31,6 +33,8 @@ export const MODEL_TONE = { haiku: 'success', sonnet: 'suggestion', opus: 'warni
 const EFFORT_LEVEL = { low: 1, medium: 2, high: 3, xhigh: 4 } as const
 const MODELS = ['haiku', 'sonnet', 'opus', 'fable'] as const
 const LABEL = 16
+// Jev's own colour: pink, so it never reads as the orange of ClaudeRouter or Fable
+const JEV_PINK = '#f472b6'
 // The crew needs this many rows above the band's own before it is drawn
 const CREW_MIN_ROWS = 22
 
@@ -105,7 +109,7 @@ function routeRows(els: Els, r: Route): RenderElement[] {
     }),
   )
   // Jev sits beside the tiers: lit when it made this pick, dim when the rules did
-  chips.push(Text({ children: [' jev '], color: 'claude', bold: r.by === 'jev', inverse: r.by === 'jev', dimColor: r.by !== 'jev' }))
+  chips.push(Text({ children: [' jev '], color: JEV_PINK, bold: r.by === 'jev', inverse: r.by === 'jev', dimColor: r.by !== 'jev' }))
   const signal = [1, 2, 3, 4].map(i => Text({ children: ['▂▄▆█'[i - 1] ?? ' '], color: i <= level ? MODEL_TONE[r.model] : 'inactive' }))
   const confBar = '▬'.repeat(Math.round(r.conf * 5)).padEnd(5, '·')
   return [
@@ -167,15 +171,55 @@ function listRow(els: Els, glyph: string, name: string, items: string[], empty: 
   ])
 }
 
-// The band above the prompt. One row per fact the events expose; nothing is estimated.
-export function drawBand(els: Els, t: Snapshot): RenderElement {
-  const { Box, Text } = els
-  const shown = [...t.tasks.filter(task => task.status === 'running'), ...t.tasks.filter(task => task.status !== 'running').slice(-1)]
+// Skills, MCP, plugins, context and plan usage: shared by the band and the pane
+export function factRows(els: Els, t: Snapshot): RenderElement[] {
   const extra = t.plugins.length - 5
   const ctx = t.usage?.context ?? null
   const five = t.usage?.rateLimits.find(r => r.kind === 'five_hour')
   const week = t.usage?.rateLimits.find(r => r.kind === 'seven_day')
   const calls = t.mcp.reduce((n, m) => n + m.calls, 0)
+  return [
+    listRow(els, '✦', 'Skills', t.skills.slice(-4).map(s => `${s.name} used ×${s.uses}`), 'none used yet', `${t.skills.length} used`),
+    listRow(els, '◇', 'MCP', t.mcp.slice(-3).map(m => `${m.server} · ${m.tool} ×${m.calls}`), 'no calls yet', `${calls} calls`),
+    listRow(els, '▣', 'Plugins', [...t.plugins.slice(-5), ...(extra > 0 ? [`+${extra}`] : [])], 'none seen', `${t.plugins.length} mods`),
+    meterRow(els, t, '◆', 'Context', ctx ? `${fmtTokens(ctx.tokens)} / ${fmtTokens(ctx.window)} · ${fmtPct(ctx.percent)}` : '—', 'context', ctx?.percent ?? null, ACCENT.brand),
+    ...(t.jev
+      ? [meterRow(els, t, '◈', 'Jev · context', `${fmtTokens(t.jev.input)} / ${fmtTokens(JEV_WINDOW)} · ${fmtPct((t.jev.input / JEV_WINDOW) * 100)} · ${t.jev.calls} calls`, 'jev', (t.jev.input / JEV_WINDOW) * 100, ACCENT.brand)]
+      : []),
+    meterRow(els, t, '◷', 'Session · 5h', five ? `5h · ${fmtPct(five.percentUsed)} used` : 'no reading', 'session', five?.percentUsed ?? null, ACCENT.sonnet),
+    meterRow(els, t, '◷', 'Weekly · 7d', week ? `7d · ${fmtPct(week.percentUsed)} used` : 'no reading', 'weekly', week?.percentUsed ?? null, ACCENT.opus),
+    warmRow(els, t),
+  ]
+}
+
+// The keep-warm clock: time left in the window, and the countdown to the next cache ping
+function warmRow(els: Els, t: Snapshot): RenderElement {
+  const w = t.warm
+  if (!w) return row(els, [label(els, '♨', 'Keep warm'), els.Text({ children: ['off · /clauderouter warm 2h'], color: 'subtle' })])
+  const left = `${fmtTime(Math.max(0, w.until - t.now) / 1000)} left`
+  const ping =
+    w.pingAt === null ? 'first ping 50 min after your next request'
+    : w.pingAt <= t.now ? 'ping due when idle'
+    : `next ping in ${fmtTime((w.pingAt - t.now) / 1000)}`
+  return row(els, [label(els, '♨', 'Keep warm'), els.Text({ children: [`on · ${left} · ${ping}`], color: 'success' })])
+}
+
+// The strip above the prompt: only the model route. The full dashboard lives in the ClaudeRouter pane, which the person can drag.
+export function drawStrip(els: Els, t: Snapshot): RenderElement {
+  const { Box, Text } = els
+  return Box({
+    flexDirection: 'column',
+    children: [
+      ...(t.route ? routeRows(els, t.route) : [row(els, [label(els, '⇄', 'Model route'), Text({ children: ['waiting for the first request'], color: 'subtle' })])]),
+      row(els, [Text({ children: ['ClaudeRouter pane: /clauderouter'], color: 'subtle', dimColor: true })]),
+    ],
+  })
+}
+
+// The band above the prompt. One row per fact the events expose; nothing is estimated.
+export function drawBand(els: Els, t: Snapshot): RenderElement {
+  const { Box, Text } = els
+  const shown = [...t.tasks.filter(task => task.status === 'running'), ...t.tasks.filter(task => task.status !== 'running').slice(-1)]
 
   return Box({
     flexDirection: 'column',
@@ -183,15 +227,7 @@ export function drawBand(els: Els, t: Snapshot): RenderElement {
       ...header(els, t),
       ...(t.route ? routeRows(els, t.route) : [row(els, [label(els, '⇄', 'Model route'), Text({ children: ['waiting for the first request'], color: 'subtle' })])]),
       ...shown.flatMap(task => taskRows(els, t, task)),
-      listRow(els, '✦', 'Skills', t.skills.slice(-4).map(s => `${s.name} used ×${s.uses}`), 'none used yet', `${t.skills.length} used`),
-      listRow(els, '◇', 'MCP', t.mcp.slice(-3).map(m => `${m.server} · ${m.tool} ×${m.calls}`), 'no calls yet', `${calls} calls`),
-      listRow(els, '▣', 'Plugins', [...t.plugins.slice(-5), ...(extra > 0 ? [`+${extra}`] : [])], 'none seen', `${t.plugins.length} mods`),
-      meterRow(els, t, '◆', 'Context', ctx ? `${fmtTokens(ctx.tokens)} / ${fmtTokens(ctx.window)} · ${fmtPct(ctx.percent)}` : '—', 'context', ctx?.percent ?? null, ACCENT.brand),
-      ...(t.jev
-        ? [meterRow(els, t, '◈', 'Jev · context', `${fmtTokens(t.jev.input)} / ${fmtTokens(JEV_WINDOW)} · ${fmtPct((t.jev.input / JEV_WINDOW) * 100)} · ${t.jev.calls} calls`, 'jev', (t.jev.input / JEV_WINDOW) * 100, ACCENT.brand)]
-        : []),
-      meterRow(els, t, '◷', 'Session · 5h', five ? `5h · ${fmtPct(five.percentUsed)} used` : 'no reading', 'session', five?.percentUsed ?? null, ACCENT.sonnet),
-      meterRow(els, t, '◷', 'Weekly · 7d', week ? `7d · ${fmtPct(week.percentUsed)} used` : 'no reading', 'weekly', week?.percentUsed ?? null, ACCENT.opus),
+      ...factRows(els, t),
     ],
   })
 }

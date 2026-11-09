@@ -41,6 +41,10 @@ A lock tells the router to leave a model alone. When the session runs on a locke
 - `/clauderouter fable lock` and `fable auto` from 0.4.1 still work; they mean `lock fable` and `unlock fable`.
 - **What went wrong before:** the router only knew haiku, sonnet and opus. A Fable id matched none of them, so each request, main thread and subagents alike, was rewritten to `claude-sonnet-5-5` or `claude-haiku-5-5`, and the band said "switched". Ids are now looked up in `MODEL_IDS` instead of swapping a word in the running id.
 
+## Dashboard pane (v0.4.2)
+
+The full dashboard is the `/clauderouter` pane: cost, tokens and time, skills, MCP, plugins, context, 5h / 7d usage, the **Keep warm** clock (time left in the window and the countdown to the next ping), and the running and finished agents. It opens at session start, 24 rows tall. Drag or resize it with the engine's pane controls, or dock it beside the chat on a wide terminal, so it does not cover the conversation. The band above the prompt is now one line, the model route. The Jev chip is pink.
+
 ## Models (v0.4.2)
 
 | Family | Id the router uses | Auto-picked | Notes |

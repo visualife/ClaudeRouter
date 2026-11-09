@@ -1,6 +1,6 @@
 import type { RenderElement } from 'claude-code'
 import type { Agent, Task } from '../types'
-import { accentOf, bar, crab, MODEL_TONE, toneOf, type Els, type Snapshot } from './band'
+import { accentOf, bar, crab, factRows, MODEL_TONE, toneOf, type Els, type Snapshot } from './band'
 import { fmtFit, fmtPct, fmtTime, fmtTokens } from './format'
 import { familyOf } from './route'
 
@@ -136,6 +136,7 @@ export function drawPane(els: Els, t: Snapshot): RenderElement {
           card('Time', started > 0 ? fmtTime((t.now - started) / 1000) : '—'),
         ],
       }),
+      Box({ flexDirection: 'column', children: factRows(els, t) }),
       Box({ flexDirection: 'column', children: section(els, t, 'Running', running, crabs) }),
       Box({ flexDirection: 'column', children: section(els, t, 'Finished', rows.filter(x => x.status !== 'running'), crabs) }),
     ],
