@@ -293,3 +293,23 @@ test('the pane shows the keep-warm clock: off by default, a countdown once a win
   expect(await onPane.find({ type: 'Text', text: /on · 1(19|20):\d\d left · first ping 50 min after your next request/ })).toBeTruthy()
   await onPane.unmount()
 })
+
+test('the band has a close control: pressing it closes the band, and band full brings it back', async ($, on) => {
+  world(on)
+  on('ui.toast', () => ({ value: {} }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const band = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'AbovePrompt', props: BAND })
+  expect(await band.find({ type: 'Button', text: /Close ClaudeRouter/ })).toBeDefined()
+  await band.press({ key: 'clauderouter-close' })
+  await band.unmount()
+
+  // closed: the hook draws nothing
+  const closed = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'AbovePrompt', props: BAND })
+  expect(await closed.find({ text: /Model route/ })).toBeUndefined()
+  await closed.unmount()
+
+  await $.command.run({ command: 'clauderouter', args: 'band full', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  const back = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'AbovePrompt', props: BAND })
+  expect(await back.find({ text: /Model route/ })).toBeDefined()
+  await back.unmount()
+})

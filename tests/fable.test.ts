@@ -60,6 +60,7 @@ test('/clauderouter band: full by default, route for the one-line band', () => {
   expect(DEFAULT_OPTIONS.band).toBe('full')
   expect(applyArgs('band route', DEFAULT_OPTIONS, 0).next).toMatchObject({ band: 'route' })
   expect(applyArgs('band full', { ...DEFAULT_OPTIONS, band: 'route' }, 0).next).toMatchObject({ band: 'full' })
+  expect(applyArgs('band off', DEFAULT_OPTIONS, 0).next).toMatchObject({ band: 'off' })
   expect(applyArgs('band wide', DEFAULT_OPTIONS, 0).next).toBeNull()
   // options saved before 0.4.2 have no band: they get the default
   expect(normalize({}).band).toBe('full')

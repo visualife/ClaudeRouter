@@ -330,9 +330,24 @@ export const register: Register = on => {
     const snap = await snapshot($, e.surface, e.props.bodyColumns, e.props.maxRows)
     terminal = snap.terminal
     const { band } = normalize(await read($, options))
-    const tree = band === 'route' ? drawStrip($.ui.resolve(e) as Els, snap) : drawBand($.ui.resolve(e) as Els, snap)
+    // Closed: nothing above the prompt until `/clauderouter band full` (or `route`)
+    if (band === 'off') return next(e)
+    const els = $.ui.resolve(e) as Els
+    const tree = band === 'route' ? drawStrip(els, snap) : drawBand(els, snap)
     mounted.set(e.requestId, snap.anim)
-    return tree
+    // The close control: the desktop draws its native close mark at the band's trailing edge, the terminal a plain ✕
+    const close = els.Button({
+      key: 'clauderouter-close',
+      label: snap.terminal ? '✕' : 'Close ClaudeRouter',
+      plain: true,
+      dimColor: true,
+      role: 'dismiss',
+      onPress: () => {
+        void update($, options, o => ({ ...normalize(o), band: 'off' as const }))
+        void $.ui.toast('ClaudeRouter band closed. /clauderouter band full brings it back.')
+      },
+    })
+    return els.Box({ flexDirection: 'row', columnGap: 2, children: [tree, close] })
   })
 
   // Draws the /ClaudeRouter pane: the cards, the running and finished lists

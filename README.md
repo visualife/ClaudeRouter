@@ -115,7 +115,7 @@ Set them from the prompt; they persist across reloads.
 | `/clauderouter cap <effort>` | Highest effort the router may pick. |
 | `/clauderouter budget <usd\|off>` | Per-turn spend limit. |
 | `/clauderouter ctx <150k\|off>` | Context size limit. |
-| `/clauderouter band <full\|route>` | Band above the prompt: every row, or only the task bar and the model route. |
+| `/clauderouter band <full\|route\|off>` | Band above the prompt: every row, only the task bar and the model route, or closed. The band also has a close control (✕ in the terminal, the native close mark on the desktop) that sets `off`; `band full` brings it back. The pane is separate and stays open. |
 | `/clauderouter status` | Show the current options. |
 
 **Jev**: it only chooses the tier; Claude still does the work. Each routed request sends the prompt text (first 4000 characters) to `api.typesafe.ai` and costs one small Jev call (about 0.3 s). In the band, `jev` sits beside `haiku sonnet opus` on the Model route row: lit when Jev made the pick, dim when the rules did. Once Jev has been used, a `Jev · context` bar appears: the last call's input tokens against Jev's 64k per-request window, with the call count. A Jev pick also starts the band's second line with `jev ·`. With no key, an error or a 2.5 s timeout, the rules decide, so nothing blocks.

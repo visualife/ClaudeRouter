@@ -42,7 +42,7 @@ export const USAGE = [
   '/clauderouter cap high        highest effort the router may pick by itself (default high)',
   '/clauderouter budget 3        USD one turn may spend before it is downgraded (off = no limit)',
   '/clauderouter ctx 150k        context size above which requests are downgraded (off = no limit)',
-  '/clauderouter band route      band above the prompt: task bar and model route only (full = every row)',
+  '/clauderouter band route      band above the prompt: task bar and model route only (full = every row, off = closed)',
   '/clauderouter status          show the current options',
   'Prompt prefix: "@sonnet:med ..." pins that one turn.',
 ].join('\n')
@@ -134,7 +134,7 @@ export function applyArgs(args: string, o: Options, now: number): { next: Option
     }
     case 'band': {
       const mode = arg.trim().toLowerCase()
-      if (mode !== 'full' && mode !== 'route') return { next: null, text: `band takes full or route\n${USAGE}` }
+      if (mode !== 'full' && mode !== 'route' && mode !== 'off') return { next: null, text: `band takes full, route or off\n${USAGE}` }
       return { next: { ...o, band: mode }, text: `band: ${mode}` }
     }
     case 'status':
