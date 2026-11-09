@@ -2,7 +2,7 @@
 
 A Claude Code mod that picks the **model and effort for each request**, and keeps a live band above your prompt showing what the session is doing.
 
-![ClaudeRouter band and /clauderouter pane](docs/screenshot.png)
+![ClaudeRouter band above the prompt: model route, task bars, skills, MCP, context, 5h / 7d and Fable usage, keep-warm](docs/screenshot.png)
 
 ## What it does
 
