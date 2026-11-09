@@ -81,11 +81,12 @@ const MINI_A = ['..BEBBBEB..', 'ABBBBBBBBBA', '..BBBBBBB..', '..B.B.B.B..']
 const MINI_B = ['..BEBBBEB..', 'ABBBBBBBBBA', '..BBBBBBB..', '.B.B.B.B.B.']
 export const MINI_COLUMNS = 11
 export const MINI_ROWS = 2
-export function miniCells(step: boolean): string {
+export function miniRows(step: boolean): Cell[][] {
   const pal: Record<string, number> = { B: 0xe07a5f, A: 0xd06e54, E: 0x1a1214 }
   const art = (step ? MINI_B : MINI_A).map(r => [...r].map((ch): number | null => (ch === '.' ? null : (pal[ch] ?? null))))
-  return packCells(pixelCells(art))
+  return pixelCells(art)
 }
+export const miniCells = (step: boolean): string => packCells(miniRows(step))
 
 function pixelCells(px: (number | null)[][]): Cell[][] {
   const rows: Cell[][] = []
@@ -108,12 +109,13 @@ function pixelCells(px: (number | null)[][]): Cell[][] {
 
 export type Tone = 'run' | 'done' | 'fail'
 
-// The bar is one fixed dot-matrix texture, like the reference: braille cells with a stable random subset of their
-// 8 dots lit. The filled part shows it in the accent, the part still ahead shows the same pattern very dim, so the
-// fill reads as the texture being revealed. Never a solid fill, and nothing moves.
+// The bar is one fixed dot-matrix texture, like the reference: a few rows of small square pixels (two per terminal
+// row, as half blocks) lit at random but stable positions. The filled part shows it in the accent, the part still
+// ahead shows the same pattern very dim, so the fill reads as the texture being revealed. Nothing moves.
 const GHOST = ACCENT.track
+export const BAR_ROWS = 2
 
-// A stable 0..1 value for a column and a seed
+// A stable 0..1 value for a position and a seed
 function hash(x: number, seed: number): number {
   let h = Math.imul(x + 1, 0x9e3779b1) ^ Math.imul(seed + 7, 0x85ebca6b)
   h ^= h >>> 15
@@ -122,25 +124,21 @@ function hash(x: number, seed: number): number {
   return (h >>> 0) / 4294967296
 }
 
-// The texture of one column, as in the reference: small square dots on a fine grid, a fixed pattern per column
-function texture(x: number): string {
-  return hash(x, 11) < 0.62 ? '▪' : '▫'
-}
-
-// The accent scaled toward black: some filled cells are a darker shade, as the reference's dots vary
+// The accent scaled toward black
 function shade(c: number, f: number): number {
   const ch = (s: number) => Math.round(((c >> s) & 0xff) * f) << s
   return ch(16) | ch(8) | ch(0)
 }
 
-// Opacity is eased, never linear. The fill is dim at its tail and brightens toward the leading edge on a power curve
-// (slow, then fast), each dot a little different. The track ahead starts dim and fades further on a smoothstep.
+// Opacity is eased, never linear, and snapped to a few steps so runs of one colour stay long (the desktop draws a
+// Text per run). The fill is dim at its tail and brightens toward the leading edge on a power curve, each pixel a
+// little different. The track ahead is far dimmer than any filled pixel and fades out on a smoothstep.
 const smooth = (t: number) => t * t * (3 - 2 * t)
-function fillLevel(x: number, filled: number): number {
+const snap = (f: number) => Math.round(f * 8) / 8
+function fillLevel(x: number, y: number, filled: number): number {
   const t = (x + 1) / Math.max(1, filled)
-  return Math.min(1, (0.55 + 0.45 * Math.pow(t, 2.4)) * (0.88 + 0.24 * hash(x, 3)))
+  return Math.min(1, (0.55 + 0.45 * Math.pow(t, 2.4)) * (0.88 + 0.24 * hash(x * 13 + y, 3)))
 }
-// The track ahead is far dimmer than any filled dot, so the value reads at a glance
 function ghostLevel(x: number, filled: number, width: number): number {
   const u = (x - filled + 1) / Math.max(1, width - filled)
   return 0.42 - 0.25 * smooth(Math.min(1, Math.max(0, u)))
@@ -151,20 +149,31 @@ export function filledOf(width: number, pct: number | null): number {
   return pct === null ? 0 : Math.round((Math.min(100, Math.max(0, pct)) / 100) * width)
 }
 
-// One row of a bar. The tone only colours the fill (a failed one is red); how much is filled is the value.
-// No reading yet: all ghost, no fill.
-export function barCells(width: number, _frame: number, tone: Tone, pct: number | null, accent: number): Cell[] {
+const lit = (x: number, y: number) => hash(x * 41 + y * 17, 11) < 0.42
+
+// A bar as `rows` terminal rows of cells (2 pixels each). The tone only colours the fill (a failed one is red); how
+// much is filled is the value. No reading yet: all ghost. A label becomes the capsule at the edge of the fill.
+export function barRows(width: number, rows: number, tone: Tone, pct: number | null, accent: number, label?: string): Cell[][] {
   const color = tone === 'fail' ? ACCENT.fail : accent
   const filled = filledOf(width, pct)
-  return Array.from({ length: width }, (_, x): Cell => [texture(x), x >= filled ? shade(GHOST, ghostLevel(x, filled, width)) : shade(color, fillLevel(x, filled))])
+  const px = Array.from({ length: rows * 2 }, (_, y) =>
+    Array.from({ length: width }, (_, x): number | null => {
+      if (!lit(x, y)) return null
+      return x >= filled ? shade(GHOST, snap(ghostLevel(x, filled, width))) : shade(color, snap(fillLevel(x, y, filled)))
+    }),
+  )
+  const grid = pixelCells(px)
+  return label ? pillRows(grid, label, accent, filled) : grid
 }
 
-// The "Tasks 2/4" capsule: dark text on the accent, sitting at the edge of the fill (centred when no position is given)
-export function withPill(cells: Cell[], text: string, accent: number, at?: number): Cell[] {
+// The "Tasks 2/4" capsule: dark text on the accent, full height, riding the edge of the fill and held inside the bar
+function pillRows(grid: Cell[][], text: string, accent: number, at: number): Cell[][] {
   const label = ` ${text} `
-  if (label.length + 2 > cells.length) return cells
-  const start = Math.min(Math.max(0, at ?? Math.floor((cells.length - label.length) / 2)), cells.length - label.length)
-  return cells.map((c, i): Cell => (i >= start && i < start + label.length ? [label[i - start] ?? ' ', 0x14121a, accent] : c))
+  const width = grid[0]?.length ?? 0
+  if (label.length + 2 > width) return grid
+  const start = Math.min(Math.max(0, at), width - label.length)
+  const mid = Math.floor(grid.length / 2)
+  return grid.map((cells, r) => cells.map((c, i): Cell => (i >= start && i < start + label.length ? [r === mid ? (label[i - start] ?? ' ') : ' ', 0x14121a, accent] : c)))
 }
 
 // A Raster the timer repaints with $.ui.blit: a running crab (bars are static and never repainted)

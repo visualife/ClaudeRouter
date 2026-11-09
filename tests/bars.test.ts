@@ -1,85 +1,83 @@
 import { expect, test } from 'claude-code/testing'
 
-import { ACCENT, barCells, filledOf, withPill } from '../hooks/pixel'
+import { ACCENT, BAR_ROWS, barRows, filledOf, type Cell } from '../hooks/pixel'
 
-const SOLID = /[█⣿]/
 // Brightness of a colour: the sum of its channels
 const lum = (c: number | undefined) => (((c ?? 0) >> 16) & 0xff) + (((c ?? 0) >> 8) & 0xff) + ((c ?? 0) & 0xff)
+const glyphs = (g: Cell[][]) => g.map(r => r.map(c => c[0]).join(''))
+// The cells that hold a pixel: a space is empty
+const dots = (g: Cell[][], from: number, to: number) => g.flatMap(r => r.slice(from, to)).filter(c => c[0] !== ' ')
+const avg = (cells: Cell[]) => cells.reduce((n, c) => n + lum(c[1]), 0) / Math.max(1, cells.length)
 
-test('bars are dot textures: no tone, percent or frame draws a solid cell', () => {
+test('a bar is a few rows of small square pixels: the right size, a sparse field, never solid', () => {
   for (const tone of ['run', 'done', 'fail'] as const) {
     for (const pct of [null, 0, 37, 50, 100]) {
-      for (const frame of [0, 1, 7, 99]) {
-        const text = barCells(30, frame, tone, pct, ACCENT.sonnet).map(c => c[0]).join('')
-        expect(SOLID.test(text)).toBe(false)
-        expect(text.length).toBe(30)
-      }
+      const g = barRows(30, BAR_ROWS, tone, pct, ACCENT.sonnet)
+      expect(g.length).toBe(BAR_ROWS)
+      expect(g.every(r => r.length === 30)).toBe(true)
+      const density = dots(g, 0, 30).length / (BAR_ROWS * 30)
+      expect(density).toBeGreaterThan(0.3)
+      expect(density).toBeLessThan(0.92)
     }
   }
+  // more than one line of dots, like the reference
+  expect(BAR_ROWS).toBeGreaterThanOrEqual(2)
 })
 
-test('the fill reveals one fixed texture: the track ahead has the same dots, only dimmer', () => {
-  const half = barCells(20, 0, 'run', 50, ACCENT.sonnet)
-  const full = barCells(20, 0, 'run', 100, ACCENT.sonnet)
-  const none = barCells(20, 0, 'run', null, ACCENT.sonnet)
-  // the same glyph in every column whatever the value, except the head marker that ends the fill
-  expect(half.map(c => c[0]).join('')).toBe(none.map(c => c[0]).join(''))
-  expect(full.map(c => c[0]).join('')).toBe(none.map(c => c[0]).join(''))
-  // every filled dot is brighter than every dot still ahead
-  const fill = half.slice(0, 10).map(c => lum(c[1]))
-  const ahead = half.slice(10).map(c => lum(c[1]))
+test('the fill reveals one fixed texture: the track ahead has the same pixels, only dimmer', () => {
+  const half = barRows(20, 3, 'run', 50, ACCENT.sonnet)
+  const full = barRows(20, 3, 'run', 100, ACCENT.sonnet)
+  const none = barRows(20, 3, 'run', null, ACCENT.sonnet)
+  // the same cells are empty whatever the value (a lit cell may be ▀ or █ depending on its shade)
+  const mask = (g: Cell[][]) => glyphs(g).map(r => r.replace(/[^ ]/g, 'x'))
+  expect(mask(half)).toEqual(mask(none))
+  expect(mask(full)).toEqual(mask(none))
+  // every filled pixel is brighter than every pixel still ahead
+  const fill = dots(half, 0, 10).map(c => lum(c[1]))
+  const ahead = dots(half, 10, 20).map(c => lum(c[1]))
   expect(Math.min(...fill)).toBeGreaterThan(Math.max(...ahead))
 })
 
 test('opacity is eased, not linear: the fill brightens slowly then fast toward its edge, and the track ahead fades out', () => {
-  const cells = barCells(40, 0, 'run', 100, ACCENT.sonnet)
-  const l = cells.map(c => lum(c[1]))
-  const first = Math.min(...l.slice(0, 4))
-  const last = Math.max(...l.slice(-4))
+  const g = barRows(40, 3, 'run', 100, ACCENT.sonnet)
+  const first = avg(dots(g, 0, 6))
+  const mid = avg(dots(g, 17, 23))
+  const last = avg(dots(g, 34, 40))
   expect(last).toBeGreaterThan(first)
   // a linear ramp would put the middle at the average of the two ends; an eased one sits well below it
-  const mid = l.slice(18, 22).reduce((a, b) => a + b, 0) / 4
   expect(mid).toBeLessThan((first + last) / 2)
-  // ahead of the fill the dots fade the further they are
-  const ahead = barCells(40, 0, 'run', 10, ACCENT.sonnet).slice(4).map(c => lum(c[1]))
-  expect(ahead[0]).toBeGreaterThan(ahead[ahead.length - 1] ?? 0)
+  const ahead = barRows(40, 3, 'run', 10, ACCENT.sonnet)
+  expect(avg(dots(ahead, 5, 14))).toBeGreaterThan(avg(dots(ahead, 31, 40)))
 })
 
-test('nothing moves: a bar is the same on every frame, and the fill is the value', () => {
-  const at = (pct: number | null, frame: number) => barCells(30, frame, 'run', pct, ACCENT.sonnet).map(c => c[0] + c[1]).join('')
-  expect(at(40, 0)).toBe(at(40, 8))
-  expect(at(null, 0)).toBe(at(null, 8))
-  // no reading: nothing is filled; a reading fills that share
+test('nothing moves, and the fill is the value', () => {
+  expect(barRows(30, 2, 'run', 40, ACCENT.sonnet)).toEqual(barRows(30, 2, 'run', 40, ACCENT.sonnet))
   expect(filledOf(30, null)).toBe(0)
   expect(filledOf(30, 0)).toBe(0)
   expect(filledOf(30, 50)).toBe(15)
   expect(filledOf(30, 100)).toBe(30)
   expect(filledOf(30, 250)).toBe(30)
-})
-
-test('a finished or failed bar still shows its value; failed is red', () => {
   expect(filledOf(20, 25)).toBe(5)
-  const fail = barCells(20, 0, 'fail', 100, ACCENT.sonnet)
-  // every filled dot is red-dominant
-  expect(fail.every(c => ((c[1] >> 16) & 0xff) > ((c[1] >> 8) & 0xff) && ((c[1] >> 16) & 0xff) > (c[1] & 0xff))).toBe(true)
 })
 
-test('the pill sits in the middle of a bar and keeps its width', () => {
-  const cells = withPill(barCells(30, 0, 'run', 50, ACCENT.sonnet), 'Tasks 2/4', ACCENT.sonnet)
-  expect(cells.length).toBe(30)
-  expect(cells.map(c => c[0]).join('')).toContain(' Tasks 2/4 ')
-  // too narrow for the label: the bar is left alone
-  expect(withPill(barCells(8, 0, 'run', 50, ACCENT.sonnet), 'Tasks 2/4', ACCENT.sonnet).map(c => c[0]).join('')).not.toContain('Tasks')
+test('a failed bar is red', () => {
+  const g = barRows(20, 2, 'fail', 100, ACCENT.sonnet)
+  const red = (c: Cell) => ((c[1] >> 16) & 0xff) > ((c[1] >> 8) & 0xff) && ((c[1] >> 16) & 0xff) > (c[1] & 0xff)
+  expect(dots(g, 0, 20).every(red)).toBe(true)
 })
 
-test('the capsule rides the edge of the fill and stays inside the bar', () => {
+test('the capsule is full height, rides the edge of the fill and stays inside the bar', () => {
   const at = (pct: number | null) => {
-    const cells = withPill(barCells(40, 0, 'run', pct, ACCENT.sonnet), 'Tasks 2/4', ACCENT.sonnet, filledOf(40, pct))
-    return cells.map(c => c[0]).join('').indexOf(' Tasks 2/4 ')
+    const g = barRows(40, 3, 'run', pct, ACCENT.sonnet, 'Tasks 2/4')
+    // the label is on the middle row; the rows above and below are the same capsule, blank
+    expect(g.length).toBe(3)
+    return glyphs(g)[1]?.indexOf(' Tasks 2/4 ') ?? -1
   }
   expect(at(null)).toBe(0)
   expect(at(25)).toBe(10)
   expect(at(50)).toBe(20)
   // near the end it is held inside the bar
   expect(at(100)).toBe(40 - ' Tasks 2/4 '.length)
+  // a bar too narrow for the label is left alone
+  expect(glyphs(barRows(8, 3, 'run', 50, ACCENT.sonnet, 'Tasks 2/4')).join('')).not.toContain('Tasks')
 })

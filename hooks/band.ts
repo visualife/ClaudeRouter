@@ -2,7 +2,7 @@ import type { Elements, RenderElement } from 'claude-code'
 import type { JevUse, McpUse, Route, SkillUse, Task, Usage } from '../types'
 import { JEV_WINDOW } from './jev'
 import { familyOf } from './route'
-import { ACCENT, type Anim, type Role, type Tone, MINI_COLUMNS, MINI_ROWS, barCells, filledOf, miniCells, packCells, spriteCells, withPill, SPRITE_COLUMNS, SPRITE_ROWS } from './pixel'
+import { ACCENT, BAR_ROWS, DEFAULT, type Anim, type Cell, type Role, type Tone, MINI_COLUMNS, MINI_ROWS, barRows, miniCells, miniRows, packCells, spriteCells, SPRITE_COLUMNS, SPRITE_ROWS } from './pixel'
 import { fmtFit, fmtPct, fmtTime, fmtTokens } from './format'
 
 export type Els = Elements['terminal']
@@ -43,18 +43,37 @@ export function accentOf(model: string | null): number {
   return family ? ACCENT[family] : ACCENT.brand
 }
 
-// A bar: a Raster in the terminal, a Text row on the desktop, which has no Raster.
-// A running bar with no total (pct null) shimmers; the terminal's timer repaints it with $.ui.blit.
-export function bar(els: Els, key: string, t: Snapshot, width: number, tone: Tone, pct: number | null, accent: number, label?: string): RenderElement {
-  const dots = barCells(width, t.frame, tone, pct, accent)
-  // The capsule rides the edge of the fill: left at 0%, further right as the value grows
-  const cells = label ? withPill(dots, label, accent, filledOf(width, pct)) : dots
-  if (!t.terminal) {
-    // The desktop has no Raster: the same dots as text, in the tone's theme colour
-    const color = tone === 'fail' ? 'error' : tone === 'done' ? 'success' : pct === null ? 'suggestion' : 'warning'
-    return els.Text({ children: [cells.map(c => c[0]).join('')], color })
+const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`
+
+// One terminal row of cells as Text runs, one Text per stretch of cells sharing their colours: the desktop has no
+// Raster, so its pixels are half-block characters with a foreground and a background colour
+function runs(els: Els, cells: Cell[]): RenderElement {
+  const out: RenderElement[] = []
+  let i = 0
+  while (i < cells.length) {
+    const fg = cells[i]?.[1] ?? DEFAULT
+    const bg = cells[i]?.[2]
+    let text = ''
+    let j = i
+    while (j < cells.length && cells[j]?.[1] === fg && cells[j]?.[2] === bg) {
+      text += cells[j]?.[0] ?? ' '
+      j += 1
+    }
+    out.push(els.Text({ children: [text], ...(fg !== DEFAULT ? { color: hex(fg) } : {}), ...(bg !== undefined && bg !== DEFAULT ? { backgroundColor: hex(bg) } : {}) }))
+    i = j
   }
-  return els.Raster({ key, columns: width, rows: 1, cells: packCells([cells]) })
+  return els.Box({ flexDirection: 'row', children: out })
+}
+
+function block(els: Els, rows: Cell[][]): RenderElement {
+  return els.Box({ flexDirection: 'column', children: rows.map(r => runs(els, r)) })
+}
+
+// A bar: several rows of small square pixels, as in the reference. A Raster in the terminal, Text runs on the
+// desktop. It shows the value and never moves; a label becomes the capsule at the edge of the fill.
+export function bar(els: Els, key: string, t: Snapshot, width: number, tone: Tone, pct: number | null, accent: number, label?: string, rows = BAR_ROWS): RenderElement {
+  const grid = barRows(width, rows, tone, pct, accent, label)
+  return t.terminal ? els.Raster({ key, columns: width, rows, cells: packCells(grid) }) : block(els, grid)
 }
 
 // How far a task is, from what is measured: finished subagents over all of them; a finished task is 100%;
@@ -81,7 +100,7 @@ function label(els: Els, glyph: string, text: string, color = 'subtle'): RenderE
 }
 
 function row(els: Els, children: RenderElement[]): RenderElement {
-  return els.Box({ flexDirection: 'row', columnGap: 2, children })
+  return els.Box({ flexDirection: 'row', alignItems: 'center', columnGap: 2, children })
 }
 
 function header(els: Els, t: Snapshot): RenderElement[] {
@@ -227,10 +246,11 @@ export function taskBar(els: Els, t: Snapshot): RenderElement[] {
   const width = Math.max(12, Math.min(40, t.columns - 52))
   const running = task.status === 'running'
   if (t.terminal && running) t.anim.push({ key: 'task-crab', kind: 'mini' })
-  // The reference crab; the desktop has no Raster, so it gets a two-row block version
+  // The reference crab: a Raster in the terminal, the same pixels as half-block Text runs on the desktop
+  const step = running && Math.floor(t.frame / 4) % 2 === 1
   const crabEl = t.terminal
-    ? els.Raster({ key: 'task-crab', columns: MINI_COLUMNS, rows: MINI_ROWS, cells: miniCells(running && Math.floor(t.frame / 4) % 2 === 1) })
-    : Box({ flexDirection: 'column', children: [Text({ children: ['▟▀█▀▙'], color: 'claude' }), Text({ children: ['▝▘▝▘▝'], color: 'claude' })] })
+    ? els.Raster({ key: 'task-crab', columns: MINI_COLUMNS, rows: MINI_ROWS, cells: miniCells(step) })
+    : block(els, miniRows(step))
   return [
     Box({
       flexDirection: 'row',
@@ -243,7 +263,7 @@ export function taskBar(els: Els, t: Snapshot): RenderElement[] {
           columnGap: 1,
           children: [Text({ children: ['●'], color: MODEL_TONE[familyOf(task.model ?? '') ?? 'sonnet'] }), Text({ children: [fmtFit(task.name, 17)], bold: true })],
         }),
-        bar(els, `taskbar-${task.id}`, t, width, toneOf(task.status), pct, accent, label),
+        bar(els, `taskbar-${task.id}`, t, width, toneOf(task.status), pct, accent, label, BAR_ROWS + 1),
         Text({ children: [pct === null ? '…' : fmtPct(pct)], color: 'subtle' }),
         crabEl,
         Text({ children: [`×${Math.max(1, total)}`], bold: true }),
