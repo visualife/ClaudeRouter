@@ -75,17 +75,16 @@ export function spriteCells(role: Role, mode: Mode, frame: number): string {
   return packCells(pixelCells(pixels(role, mode === 'run' && Math.floor(frame / 4) % 2 === 1)))
 }
 
-// The small crab for the task bar: 11 x 4 pixels, padded to 6 rows (3 terminal rows) so no leg is clipped.
+// The small crab for the task bar: 11 x 4 pixels, exactly 2 terminal rows, so nothing is cut or padded out of the row.
 // The reference's shape: eyes, side arms, body, four legs.
 const MINI_A = ['..BEBBBEB..', 'ABBBBBBBBBA', '..BBBBBBB..', '..B.B.B.B..']
 const MINI_B = ['..BEBBBEB..', 'ABBBBBBBBBA', '..BBBBBBB..', '.B.B.B.B.B.']
 export const MINI_COLUMNS = 11
-export const MINI_ROWS = 3
+export const MINI_ROWS = 2
 export function miniCells(step: boolean): string {
   const pal: Record<string, number> = { B: 0xe07a5f, A: 0xd06e54, E: 0x1a1214 }
   const art = (step ? MINI_B : MINI_A).map(r => [...r].map((ch): number | null => (ch === '.' ? null : (pal[ch] ?? null))))
-  const empty = Array<number | null>(MINI_COLUMNS).fill(null)
-  return packCells(pixelCells([empty, ...art, empty]))
+  return packCells(pixelCells(art))
 }
 
 function pixelCells(px: (number | null)[][]): Cell[][] {
@@ -157,12 +156,7 @@ export function filledOf(width: number, pct: number | null): number {
 export function barCells(width: number, _frame: number, tone: Tone, pct: number | null, accent: number): Cell[] {
   const color = tone === 'fail' ? ACCENT.fail : accent
   const filled = filledOf(width, pct)
-  // The last filled cell is a bright head marker: the bar ends exactly where the value does
-  return Array.from({ length: width }, (_, x): Cell => {
-    if (x >= filled) return [texture(x), shade(GHOST, ghostLevel(x, filled, width))]
-    if (x === filled - 1) return ['▌', color]
-    return [texture(x), shade(color, fillLevel(x, filled))]
-  })
+  return Array.from({ length: width }, (_, x): Cell => [texture(x), x >= filled ? shade(GHOST, ghostLevel(x, filled, width)) : shade(color, fillLevel(x, filled))])
 }
 
 // The "Tasks 2/4" capsule: dark text on the accent, sitting at the edge of the fill (centred when no position is given)
