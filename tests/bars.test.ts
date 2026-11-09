@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { ACCENT, BAR_ROWS, barRows, filledOf, type Cell } from '../hooks/pixel'
+import { ACCENT, BAR_ROWS, barRows, filledOf, miniLine, type Cell } from '../hooks/pixel'
 
 // Brightness of a colour: the sum of its channels
 const lum = (c: number | undefined) => (((c ?? 0) >> 16) & 0xff) + (((c ?? 0) >> 8) & 0xff) + ((c ?? 0) & 0xff)
@@ -80,4 +80,13 @@ test('the capsule is full height, rides the edge of the fill and stays inside th
   expect(at(100)).toBe(40 - ' Tasks 2/4 '.length)
   // a bar too narrow for the label is left alone
   expect(glyphs(barRows(8, 3, 'run', 50, ACCENT.sonnet, 'Tasks 2/4')).join('')).not.toContain('Tasks')
+})
+
+test("the desktop crab is one line of five braille characters, and its legs step", () => {
+  const still = miniLine(false).map(c => c[0]).join("")
+  expect([...still].length).toBe(5)
+  expect([...still].every(ch => ch >= "⠀" && ch <= "⣿")).toBe(true)
+  // arms: the second dot row is lit in the first and last column
+  expect(((still.codePointAt(0) ?? 0) - 0x2800) & 0x02).toBe(0x02)
+  expect(miniLine(true).map(c => c[0]).join("")).not.toBe(still)
 })

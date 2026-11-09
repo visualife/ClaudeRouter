@@ -2,7 +2,7 @@ import type { Elements, RenderElement } from 'claude-code'
 import type { JevUse, McpUse, Route, SkillUse, Task, Usage } from '../types'
 import { JEV_WINDOW } from './jev'
 import { familyOf } from './route'
-import { ACCENT, DEFAULT, type Anim, type Cell, type Role, type Tone, MINI_COLUMNS, MINI_ROWS, barLine, filledOf, miniCells, miniRows, packCells, pillRows, spriteCells, SPRITE_COLUMNS, SPRITE_ROWS } from './pixel'
+import { ACCENT, DEFAULT, type Anim, type Cell, type Role, type Tone, MINI_COLUMNS, MINI_ROWS, barLine, filledOf, miniCells, miniLine, packCells, pillRows, spriteCells, SPRITE_COLUMNS, SPRITE_ROWS } from './pixel'
 import { fmtFit, fmtPct, fmtTime, fmtTokens } from './format'
 
 export type Els = Elements['terminal']
@@ -64,10 +64,6 @@ function runs(els: Els, cells: Cell[], small = true): RenderElement {
     i = j
   }
   return els.Box({ flexDirection: 'row', children: out })
-}
-
-function block(els: Els, rows: Cell[][]): RenderElement {
-  return els.Box({ flexDirection: 'column', children: rows.map(r => runs(els, r)) })
 }
 
 // A bar: one text line tall with a 4-row braille dot matrix inside it, as in the reference. A Raster in the terminal, Text runs on the
@@ -264,11 +260,11 @@ export function taskBar(els: Els, t: Snapshot): RenderElement[] {
   const width = Math.max(12, Math.min(40, t.columns - 52))
   const running = task.status === 'running'
   if (t.terminal && running) t.anim.push({ key: 'task-crab', kind: 'mini' })
-  // The reference crab: a Raster in the terminal, the same pixels as half-block Text runs on the desktop
+  // The reference crab: a Raster in the terminal, one line of braille dots on the desktop
   const step = running && Math.floor(t.frame / 4) % 2 === 1
   const crabEl = t.terminal
     ? els.Raster({ key: 'task-crab', columns: MINI_COLUMNS, rows: MINI_ROWS, cells: miniCells(step) })
-    : block(els, miniRows(step))
+    : runs(els, miniLine(step), false)
   return [
     Box({
       flexDirection: 'row',

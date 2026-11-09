@@ -88,6 +88,21 @@ export function miniRows(step: boolean): Cell[][] {
 }
 export const miniCells = (step: boolean): string => packCells(miniRows(step))
 
+// The crab in one text line, for the desktop, where a pixel row is a whole line of text: braille characters, each a
+// 2 x 4 grid of dots, so five of them hold the 10 x 4 crab (eye gaps, side arms, body, four legs). One line tall, the
+// height of the text beside it, so it cannot be clipped.
+const MINI_DOTS_A = [".##.##.##.", "##########", ".########.", ".#.#..#.#."]
+const MINI_DOTS_B = [".##.##.##.", "##########", ".########.", "#.#....#.#"]
+const DOT_BITS = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]]
+export function miniLine(step: boolean): Cell[] {
+  const art = step ? MINI_DOTS_B : MINI_DOTS_A
+  return Array.from({ length: 5 }, (_, c): Cell => {
+    let mask = 0
+    art.forEach((row, y) => [0, 1].forEach(dx => { if (row[c * 2 + dx] === "#") mask |= DOT_BITS[y]?.[dx] ?? 0 }))
+    return [String.fromCodePoint(0x2800 + mask), 0xe07a5f]
+  })
+}
+
 function pixelCells(px: (number | null)[][]): Cell[][] {
   const rows: Cell[][] = []
   for (let y = 0; y + 1 < px.length; y += 2) {
