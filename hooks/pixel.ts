@@ -92,8 +92,11 @@ export function spriteCells(role: Role, mode: Mode, frame: number): string {
 
 export type Tone = 'run' | 'done' | 'fail'
 
-// Dither ramp: sparse at the left, dense at the leading edge, like the design's fading dot field
-const RAMP = ['⡀', '⡄', '⡆', '⡇', '⣿']
+// Bars are a field of scattered braille dots, never a solid fill: sparse at the left, thicker toward the
+// leading edge, a few brighter sparks. A full cell (⣿ or █) is never drawn.
+const SPARK1 = ['⠁', '⠂', '⠄', '⡀', '⠈', '⠐', '⠠', '⢀']
+const SPARK2 = ['⠅', '⠊', '⠑', '⠢', '⡈', '⢐', '⠌', '⡐']
+const SPARK3 = ['⠕', '⠪', '⡢', '⢕', '⠵', '⡪']
 const TRACK: Cell = ['⠂', ACCENT.track]
 
 function lighten(c: number): number {
@@ -101,33 +104,60 @@ function lighten(c: number): number {
   return ch(16) | ch(8) | ch(0)
 }
 
-// One row of a bar in an accent colour. A known percent fills to it along the ramp; 'run' with
-// none shimmers (a twinkling dithered field with a bright head sweeping through); 'done' and 'fail' are solid.
+// A stable 0..1 value for a column and a seed: the same dots every draw, until the seed moves
+function hash(x: number, seed: number): number {
+  let h = Math.imul(x + 1, 0x9e3779b1) ^ Math.imul(seed + 7, 0x85ebca6b)
+  h ^= h >>> 15
+  h = Math.imul(h, 0x2c1b3c6d)
+  h ^= h >>> 12
+  return (h >>> 0) / 4294967296
+}
+
+// One sparkle cell: density d (0 sparse, 1 thick) picks how many dots, the hash which ones
+function sparkle(x: number, seed: number, d: number, accent: number): Cell {
+  const r = hash(x, seed)
+  const level = d + (r - 0.5) * 0.4
+  const set = level < 0.4 ? SPARK1 : level < 0.75 ? SPARK2 : SPARK3
+  const glyph = set[Math.floor(hash(x, seed + 1) * set.length)] ?? '⠂'
+  return [glyph, r > 0.94 ? lighten(accent) : accent]
+}
+
+// One row of a bar in an accent colour. A known percent fills to it, thickening toward the edge; 'run' with
+// none shimmers (twinkling dots with a brighter head sweeping through); 'done' and 'fail' are a still sparkle field.
 export function barCells(width: number, frame: number, tone: Tone, pct: number | null, accent: number): Cell[] {
-  if (tone === 'fail') return Array.from({ length: width }, (): Cell => ['█', ACCENT.fail])
-  if (tone === 'done') return Array.from({ length: width }, (): Cell => ['█', accent])
+  const ramp = (x: number) => 0.3 + 0.5 * ((x + 1) / width)
+  if (tone === 'fail') return Array.from({ length: width }, (_, x): Cell => sparkle(x, 0, ramp(x), ACCENT.fail))
+  if (tone === 'done') return Array.from({ length: width }, (_, x): Cell => sparkle(x, 0, ramp(x), accent))
   if (pct !== null) {
     const filled = Math.round((Math.min(100, Math.max(0, pct)) / 100) * width)
-    return Array.from({ length: width }, (_, x): Cell => {
-      if (x >= filled) return TRACK
-      const level = Math.min(RAMP.length - 1, Math.floor(((x + 1) / filled) * RAMP.length))
-      return [RAMP[level] ?? '⣿', accent]
-    })
+    return Array.from({ length: width }, (_, x): Cell => (x >= filled ? TRACK : sparkle(x, 0, 0.2 + 0.7 * ((x + 1) / filled), accent)))
   }
   const head = (frame % (width + 6)) - 3
+  const seed = Math.floor(frame / 2)
   return Array.from({ length: width }, (_, x): Cell => {
     const d = x - head
-    if (d >= 0 && d < 3) return ['⣿', lighten(accent)]
-    const twinkle = (x * 7 + frame) % 5
-    return [RAMP[twinkle < 2 ? 1 : twinkle < 4 ? 2 : 3] ?? '⡆', accent]
+    return d >= 0 && d < 3 ? sparkle(x, seed, 0.95, lighten(accent)) : sparkle(x, seed, 0.45, accent)
   })
 }
 
-// A Raster the timer repaints with $.ui.blit: a shimmering bar, or a running crab
+// A label drawn over the middle of a bar, like the "Tasks 2/4" pill: dark text on the accent
+export function withPill(cells: Cell[], text: string, accent: number): Cell[] {
+  const label = ` ${text} `
+  if (label.length + 2 > cells.length) return cells
+  const start = Math.floor((cells.length - label.length) / 2)
+  return cells.map((c, i): Cell => (i >= start && i < start + label.length ? [label[i - start] ?? ' ', 0x14121a, accent] : c))
+}
+
+// A Raster the timer repaints with $.ui.blit: a shimmering bar (with its pill, if it has one), or a running crab
 export type Anim =
-  | { key: string; kind: 'bar'; width: number; accent: number }
+  | { key: string; kind: 'bar'; width: number; accent: number; label?: string }
   | { key: string; kind: 'sprite'; role: Role }
 
 export function animCells(a: Anim, frame: number): string {
-  return a.kind === 'sprite' ? spriteCells(a.role, 'run', frame) : packCells([barCells(a.width, frame, 'run', null, a.accent)])
+  if (a.kind === 'sprite') return spriteCells(a.role, 'run', frame)
+  const cells = barCells(a.width, frame, 'run', null, a.accent)
+  return packCells([a.label ? withPill(cells, a.label, a.accent) : cells])
 }
+
+// A one-row crab for the task bar: claws up, brand colour
+export const MINI_CRAB: Cell[] = [['▝', ACCENT.brand], ['▟', ACCENT.brand], ['█', ACCENT.brand], ['▙', ACCENT.brand], ['▘', ACCENT.brand]]

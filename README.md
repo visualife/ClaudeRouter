@@ -43,7 +43,7 @@ A lock tells the router to leave a model alone. When the session runs on a locke
 
 ## Dashboard pane (v0.4.2)
 
-The full dashboard is the `/clauderouter` pane: cost, tokens and time, skills, MCP, plugins, context, 5h / 7d usage, the **Keep warm** clock (time left in the window and the countdown to the next ping), and the running and finished agents. It opens at session start, 24 rows tall. Drag or resize it with the engine's pane controls, or dock it beside the chat on a wide terminal, so it does not cover the conversation. The band above the prompt is now one line, the model route. The Jev chip is pink.
+The full dashboard is the `/clauderouter` pane: cost, tokens and time, skills, MCP, plugins, context, 5h / 7d usage, the **Keep warm** clock (time left in the window and the countdown to the next ping), and the running and finished agents. It opens at session start, 24 rows tall. Drag or resize it with the engine's pane controls, or dock it beside the chat on a wide terminal, so it does not cover the conversation. The band above the prompt is now the **task bar** (● task name, a bar with a `Tasks 2/4` pill, the percent, a small crab and the agent count) over the model route line. Every bar is a field of scattered braille dots that thickens toward its leading edge, with a few brighter sparks; none is ever a solid fill. The Jev chip is pink.
 
 ## Models (v0.4.2)
 

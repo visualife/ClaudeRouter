@@ -2,7 +2,7 @@ import type { Elements, RenderElement } from 'claude-code'
 import type { JevUse, McpUse, Route, SkillUse, Task, Usage } from '../types'
 import { JEV_WINDOW } from './jev'
 import { familyOf } from './route'
-import { ACCENT, type Anim, type Role, type Tone, barCells, packCells, spriteCells, SPRITE_COLUMNS, SPRITE_ROWS } from './pixel'
+import { ACCENT, type Anim, type Role, type Tone, MINI_CRAB, barCells, packCells, spriteCells, withPill, SPRITE_COLUMNS, SPRITE_ROWS } from './pixel'
 import { fmtFit, fmtPct, fmtTime, fmtTokens } from './format'
 
 export type Els = Elements['terminal']
@@ -45,13 +45,15 @@ export function accentOf(model: string | null): number {
 
 // A bar: a Raster in the terminal, a Text row on the desktop, which has no Raster.
 // A running bar with no total (pct null) shimmers; the terminal's timer repaints it with $.ui.blit.
-export function bar(els: Els, key: string, t: Snapshot, width: number, tone: Tone, pct: number | null, accent: number): RenderElement {
-  const cells = barCells(width, t.frame, tone, pct, accent)
+export function bar(els: Els, key: string, t: Snapshot, width: number, tone: Tone, pct: number | null, accent: number, label?: string): RenderElement {
+  const dots = barCells(width, t.frame, tone, pct, accent)
+  const cells = label ? withPill(dots, label, accent) : dots
   if (!t.terminal) {
+    // The desktop has no Raster: the same dots as text, in the tone's theme colour
     const color = tone === 'fail' ? 'error' : tone === 'done' ? 'success' : pct === null ? 'suggestion' : 'warning'
-    return els.Text({ children: [cells.map(c => (c[0] === '⠂' ? '·' : '█')).join('')], color })
+    return els.Text({ children: [cells.map(c => c[0]).join('')], color })
   }
-  if (tone === 'run' && pct === null) t.anim.push({ key, kind: 'bar', width, accent })
+  if (tone === 'run' && pct === null) t.anim.push({ key, kind: 'bar', width, accent, ...(label ? { label } : {}) })
   return els.Raster({ key, columns: width, rows: 1, cells: packCells([cells]) })
 }
 
@@ -204,12 +206,48 @@ function warmRow(els: Els, t: Snapshot): RenderElement {
   return row(els, [label(els, '♨', 'Keep warm'), els.Text({ children: [`on · ${left} · ${ping}`], color: 'success' })])
 }
 
+// The task bar: ● name, a sparkle bar with a "Tasks done/total" pill, the percent, a crab and the agent count.
+// Shows the running task, else the last one; nothing before the first prompt.
+export function taskBar(els: Els, t: Snapshot): RenderElement[] {
+  const { Box, Text } = els
+  const task = t.tasks.filter(x => x.status === 'running').at(-1) ?? t.tasks.at(-1)
+  if (!task) return []
+  const total = task.agents.length
+  const done = task.agents.filter(a => a.status !== 'running').length
+  const pct = task.status === 'running' ? (total > 0 ? (done / total) * 100 : null) : 100
+  const label = total > 0 ? `Tasks ${done}/${total}` : task.status === 'running' ? `step ${task.steps}` : 'done'
+  const accent = accentOf(task.model)
+  const width = Math.max(12, Math.min(40, t.columns - 52))
+  const crabEl = t.terminal
+    ? els.Raster({ key: 'task-crab', columns: MINI_CRAB.length, rows: 1, cells: packCells([MINI_CRAB]) })
+    : Text({ children: ['▝▟█▙▘'], color: 'claude' })
+  return [
+    Box({
+      flexDirection: 'row',
+      columnGap: 2,
+      children: [
+        Box({
+          width: 20,
+          flexDirection: 'row',
+          columnGap: 1,
+          children: [Text({ children: ['●'], color: MODEL_TONE[familyOf(task.model ?? '') ?? 'sonnet'] }), Text({ children: [fmtFit(task.name, 17)], bold: true })],
+        }),
+        bar(els, `taskbar-${task.id}`, t, width, toneOf(task.status), pct, accent, label),
+        Text({ children: [pct === null ? '…' : fmtPct(pct)], color: 'subtle' }),
+        crabEl,
+        Text({ children: [`×${Math.max(1, total)}`], bold: true }),
+      ],
+    }),
+  ]
+}
+
 // The strip above the prompt: only the model route. The full dashboard lives in the ClaudeRouter pane, which the person can drag.
 export function drawStrip(els: Els, t: Snapshot): RenderElement {
   const { Box, Text } = els
   return Box({
     flexDirection: 'column',
     children: [
+      ...taskBar(els, t),
       ...(t.route ? routeRows(els, t.route) : [row(els, [label(els, '⇄', 'Model route'), Text({ children: ['waiting for the first request'], color: 'subtle' })])]),
       row(els, [Text({ children: ['ClaudeRouter pane: /clauderouter'], color: 'subtle', dimColor: true })]),
     ],

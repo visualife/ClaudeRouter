@@ -1,6 +1,6 @@
 import type { RenderElement } from 'claude-code'
 import type { Agent, Task } from '../types'
-import { accentOf, bar, crab, factRows, MODEL_TONE, toneOf, type Els, type Snapshot } from './band'
+import { accentOf, bar, crab, factRows, MODEL_TONE, taskBar, toneOf, type Els, type Snapshot } from './band'
 import { fmtFit, fmtPct, fmtTime, fmtTokens } from './format'
 import { familyOf } from './route'
 
@@ -127,6 +127,7 @@ export function drawPane(els: Els, t: Snapshot): RenderElement {
           Text({ children: [r ? `route: ${r.model} · ${r.effort} · conf ${r.conf.toFixed(2)}` : 'route: —'], color: 'subtle' }),
         ],
       }),
+      ...taskBar(els, t),
       Box({
         flexDirection: 'row',
         columnGap: 1,

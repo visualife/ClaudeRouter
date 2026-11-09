@@ -113,6 +113,11 @@ for (const surface of ['terminal', 'desktop'] as const) {
     // The band above the prompt is only the route; the dashboard is in the pane
     expect(await band.find({ text: /Model route/ })).toBeDefined()
     expect(await band.find({ text: /\/clauderouter/ })).toBeDefined()
+    // The task bar: name, pill, percent and the agent count
+    expect(await band.find({ text: /×1/ })).toBeDefined()
+    // The pill is text on the desktop and cells inside the Raster on the terminal
+    if (surface === 'desktop') expect(await band.find({ text: /Tasks 0\/1/ })).toBeDefined()
+    else expect((await band.findAll({ type: 'Raster' })).length).toBeGreaterThan(0)
     expect(await band.find({ text: /Weekly/ })).toBeUndefined()
     await band.unmount()
 
