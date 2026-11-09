@@ -59,7 +59,8 @@ function runs(els: Els, cells: Cell[]): RenderElement {
       text += cells[j]?.[0] ?? ' '
       j += 1
     }
-    out.push(els.Text({ children: [text], ...(fg !== DEFAULT ? { color: hex(fg) } : {}), ...(bg !== undefined && bg !== DEFAULT ? { backgroundColor: hex(bg) } : {}) }))
+    // caption: the desktop's smallest text size, so each pixel is small and the bars and crab stay compact
+    out.push(els.Text({ children: [text], size: 'caption', ...(fg !== DEFAULT ? { color: hex(fg) } : {}), ...(bg !== undefined && bg !== DEFAULT ? { backgroundColor: hex(bg) } : {}) }))
     i = j
   }
   return els.Box({ flexDirection: 'row', children: out })
