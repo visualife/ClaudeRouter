@@ -22,9 +22,13 @@ test('the fill reveals one fixed texture: the track ahead has the same dots, onl
   const half = barCells(20, 0, 'run', 50, ACCENT.sonnet)
   const full = barCells(20, 0, 'run', 100, ACCENT.sonnet)
   const none = barCells(20, 0, 'run', null, ACCENT.sonnet)
-  // the same glyph in every column whatever the value
-  expect(half.map(c => c[0]).join('')).toBe(full.map(c => c[0]).join(''))
-  expect(none.map(c => c[0]).join('')).toBe(full.map(c => c[0]).join(''))
+  // the same glyph in every column whatever the value, except the head marker that ends the fill
+  const same = (a: typeof half, heads: number[]) => a.every((c, i) => heads.includes(i) || c[0] === none[i]?.[0])
+  expect(same(half, [9])).toBe(true)
+  expect(same(full, [19])).toBe(true)
+  expect(half[9]?.[0]).toBe('▌')
+  expect(full[19]?.[0]).toBe('▌')
+  expect(none.some(c => c[0] === '▌')).toBe(false)
   // every filled dot is brighter than every dot still ahead
   const fill = half.slice(0, 10).map(c => lum(c[1]))
   const ahead = half.slice(10).map(c => lum(c[1]))

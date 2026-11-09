@@ -139,11 +139,12 @@ function shade(c: number, f: number): number {
 const smooth = (t: number) => t * t * (3 - 2 * t)
 function fillLevel(x: number, filled: number): number {
   const t = (x + 1) / Math.max(1, filled)
-  return Math.min(1, (0.4 + 0.6 * Math.pow(t, 2.4)) * (0.85 + 0.3 * hash(x, 3)))
+  return Math.min(1, (0.55 + 0.45 * Math.pow(t, 2.4)) * (0.88 + 0.24 * hash(x, 3)))
 }
+// The track ahead is far dimmer than any filled dot, so the value reads at a glance
 function ghostLevel(x: number, filled: number, width: number): number {
   const u = (x - filled + 1) / Math.max(1, width - filled)
-  return 0.7 - 0.45 * smooth(Math.min(1, Math.max(0, u)))
+  return 0.42 - 0.25 * smooth(Math.min(1, Math.max(0, u)))
 }
 
 // How many of width cells a percent fills
@@ -156,7 +157,12 @@ export function filledOf(width: number, pct: number | null): number {
 export function barCells(width: number, _frame: number, tone: Tone, pct: number | null, accent: number): Cell[] {
   const color = tone === 'fail' ? ACCENT.fail : accent
   const filled = filledOf(width, pct)
-  return Array.from({ length: width }, (_, x): Cell => [texture(x), x >= filled ? shade(GHOST, ghostLevel(x, filled, width)) : shade(color, fillLevel(x, filled))])
+  // The last filled cell is a bright head marker: the bar ends exactly where the value does
+  return Array.from({ length: width }, (_, x): Cell => {
+    if (x >= filled) return [texture(x), shade(GHOST, ghostLevel(x, filled, width))]
+    if (x === filled - 1) return ['▌', color]
+    return [texture(x), shade(color, fillLevel(x, filled))]
+  })
 }
 
 // The "Tasks 2/4" capsule: dark text on the accent, sitting at the edge of the fill (centred when no position is given)
