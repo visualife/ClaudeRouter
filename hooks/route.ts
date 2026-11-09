@@ -39,7 +39,8 @@ export const MODEL_IDS: Record<Model, string> = {
   haiku: 'claude-haiku-5-5',
   sonnet: 'claude-sonnet-5-5',
   opus: 'claude-opus-5-5',
-  fable: 'claude-fable-5-1',
+  // Newest Fable. A session already on another Fable (5.1, 5) keeps its own id: idFor only uses this when switching in.
+  fable: 'claude-fable-5-2',
 }
 
 // The model family a full model id belongs to, or null when it names none

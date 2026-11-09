@@ -30,7 +30,11 @@ test('a Fable id is recognised as Fable', () => {
 test('idFor keeps a Fable id and never invents one', () => {
   expect(idFor('fable', 'claude-fable-5-1')).toBe('claude-fable-5-1')
   expect(idFor('sonnet', 'claude-fable-5-1')).toBe(MODEL_IDS.sonnet)
-  expect(idFor('fable', 'claude-sonnet-5-5')).toBe('claude-fable-5-1')
+  expect(idFor('fable', 'claude-sonnet-5-5')).toBe('claude-fable-5-2')
+  // a session on Fable 5.2 or 5 keeps its own id too
+  expect(idFor('fable', 'claude-fable-5-2')).toBe('claude-fable-5-2')
+  expect(idFor('fable', 'claude-fable-5')).toBe('claude-fable-5')
+  expect(familyOf('claude-fable-5-2')).toBe('fable')
   // unchanged behaviour between the three tiers: the version suffix is kept
   expect(idFor('haiku', 'claude-opus-5-5')).toBe('claude-haiku-5-5')
   expect(idFor('opus', 'something-unknown')).toBe('claude-opus-5-5')

@@ -39,7 +39,18 @@ A lock tells the router to leave a model alone. When the session runs on a locke
 - A model id the router does not know is never rewritten (it used to become Sonnet).
 - A pin (`/clauderouter pin <model>`) or an `@model` prompt prefix still wins over a lock.
 - `/clauderouter fable lock` and `fable auto` from 0.4.1 still work; they mean `lock fable` and `unlock fable`.
-- **What went wrong before:** the router only knew haiku, sonnet and opus. A Fable id matched none of them, so each request, main thread and subagents alike, was rewritten to `claude-sonnet-5-5` or `claude-haiku-5-5`, and the band said "switched". Ids are now looked up in `MODEL_IDS` (Fable is `claude-fable-5-1`) instead of swapping a word in the running id.
+- **What went wrong before:** the router only knew haiku, sonnet and opus. A Fable id matched none of them, so each request, main thread and subagents alike, was rewritten to `claude-sonnet-5-5` or `claude-haiku-5-5`, and the band said "switched". Ids are now looked up in `MODEL_IDS` instead of swapping a word in the running id.
+
+## Models (v0.4.2)
+
+| Family | Id the router uses | Auto-picked | Notes |
+|---|---|---|---|
+| `haiku` | `claude-haiku-5-5` | yes | Light reads, searches, subagents of type Explore. |
+| `sonnet` | `claude-sonnet-5-5` | yes | Default for building and executing. |
+| `opus` | `claude-opus-5-5` | yes | Planning only (see cost guards). |
+| `fable` | `claude-fable-5-2` | never | Locked by default. A session already on Fable 5.1 or 5 keeps its own id; `claude-fable-5-2` is only used when you pin or switch into Fable. |
+
+**Fable and your plan** (per [Anthropic's help page](https://support.claude.com/en/articles/15424964-claude-fable-models-on-your-plan), checked 2026-11-09): Fable 5, 5.1 and 5.2 are on all paid plans. Max, Ultra and premium Team/Enterprise seats include Fable in the plan, up to 50% of the weekly limit; Pro and standard seats run Fable on usage credits. The page gives no end date for the plan inclusion; the one dated promotion (Fable 5 only) ended 2026-07-19. Claude Code minimums: Fable 5.2 needs 2.1.321, 5.1 needs 2.1.255. That is why Fable stays locked and is never picked automatically: it eats the weekly limit faster than the other models.
 
 ## Claude desktop
 
