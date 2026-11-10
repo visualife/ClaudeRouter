@@ -7,7 +7,7 @@ import { EFFORTS, type Pin, directiveOf, guard } from './guard'
 import { type Els, type Snapshot, drawBand, drawStrip } from './band'
 import { drawPane } from './pane'
 import { type Anim, animCells } from './pixel'
-import { effortFor, familyOf, idFor, pickRoute, roleOf, whyOf } from './route'
+import { copyFloor, effortFor, familyOf, idFor, isCopy, pickRoute, roleOf, whyOf } from './route'
 import { attachAgent, addPlugin, bumpMcp, bumpSkill, nameOf, patchAgent, patchTask, toUsage } from './lists'
 
 const PANE = 'agent-ClaudeRouter'
@@ -199,6 +199,8 @@ export const register: Register = on => {
         await update($, jev, u => ({ calls: (u?.calls ?? 0) + 1, input: asked.input, output: asked.output }))
       }
     }
+    // Copywriting is raised to a strong pick whoever chose (pickRoute already did it for the rules)
+    pick = copyFloor(pick, input)
     // Cost guards run last, on whoever picked: they cap what the turn may spend
     const u = await read($, usage)
     const turnCost = u?.cost != null ? Math.max(0, u.cost - turnCostStart) : null
@@ -215,6 +217,7 @@ export const register: Register = on => {
       turnTools,
       contextTokens: u?.context.tokens ?? null,
       turnCost,
+      isCopy: isCopy(input.text) && input.subagentType !== 'Explore',
     })
     if (!warned && guarded.limits.some(l => l.startsWith('turn $') || l.startsWith('ctx '))) {
       warned = true

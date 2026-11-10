@@ -43,6 +43,8 @@ export type GuardInput = {
   contextTokens: number | null
   // USD spent since the turn started
   turnCost: number | null
+  // Copywriting: the turn keeps a strong model or, where a limit takes the model down, a strong effort
+  isCopy?: boolean
 }
 
 export type Guarded = { model: Model; effort: Effort; limits: string[] }
@@ -65,8 +67,11 @@ export function guard(i: GuardInput): Guarded {
     const executing = i.turnTools.some(t => WRITES.includes(t)) || i.turnTools.length >= EXEC_TOOLS
     if (i.isSub && !i.isPlan) {
       model = 'sonnet'
-      effort = capEffort(effort, 'medium')
+      effort = capEffort(effort, i.isCopy ? 'high' : 'medium')
       limits.push('subagent→sonnet')
+    } else if (i.isCopy) {
+      // Copy stays on Opus for the whole turn, writing included: no plan/execute split, no long-prompt cap
+      limits.push('copy: strong')
     } else if (!i.isSub && (i.step >= OPUS_STEPS || executing)) {
       model = 'sonnet'
       effort = capEffort(effort, 'medium')
@@ -78,17 +83,18 @@ export function guard(i: GuardInput): Guarded {
   }
 
   // A subagent is never above medium unless it plans
-  if (i.isSub && !i.isPlan) effort = capEffort(effort, 'medium')
+  if (i.isSub && !i.isPlan) effort = capEffort(effort, i.isCopy ? 'high' : 'medium')
 
   if (i.ctxCap > 0 && i.contextTokens !== null && i.contextTokens > i.ctxCap) {
     model = capModel(model, 'sonnet')
-    effort = capEffort(effort, i.contextTokens > i.ctxCap * 1.5 ? 'low' : 'medium')
+    // Copy keeps a strong effort even when the model is taken down
+    effort = capEffort(effort, i.isCopy ? 'high' : i.contextTokens > i.ctxCap * 1.5 ? 'low' : 'medium')
     limits.push(`ctx ${Math.round(i.contextTokens / 1000)}k`)
   }
 
   if (i.budget > 0 && i.turnCost !== null && i.turnCost > i.budget) {
     model = capModel(model, 'sonnet')
-    effort = capEffort(effort, i.turnCost > i.budget * 2 ? 'low' : 'medium')
+    effort = capEffort(effort, i.isCopy ? 'high' : i.turnCost > i.budget * 2 ? 'low' : 'medium')
     limits.push(`turn $${i.turnCost.toFixed(2)}>$${i.budget}`)
   }
   return { model, effort, limits }

@@ -27,6 +27,7 @@ Applied on every model request, after the router (or Jev) has picked. Defaults p
 | Context cap | 150k tokens | Over it: Sonnet medium. Over 1.5×: Sonnet low. `/clauderouter ctx 200k` or `off`. |
 | Your choice wins | none | `/clauderouter pin sonnet medium` applies from the **next request, even mid-turn**. `pin auto` releases it. Or prefix one prompt: `@sonnet:med build the app` / `@opus:high ...`. |
 | Model locks | `fable` | A session on a locked model is left alone, subagents included. See **Model locks**. |
+| Copywriting stays strong | on | A copy prompt (headline, tagline, landing page, product description, newsletter, tone of voice, `rédige`, `accroche`, `fiche produit`...) goes to Opus at high effort and stays there for the whole turn, writing included: no plan/execute split, no long-prompt cap. Over the budget or context cap the model drops to Sonnet but the effort stays high. Copy subagents run on Sonnet at high effort. Your effort ceiling, pin and locks still win. |
 
 The band's second line shows `guard ...` with the reason whenever a limit changed the pick. Budget uses the session cost the engine reports (API-equivalent USD).
 

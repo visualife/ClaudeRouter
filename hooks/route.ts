@@ -26,6 +26,19 @@ const HEAVY = /\b(plan|architect\w*|design|debug\w*|trace|root cause|refactor\w*
 const MID = /\b(write|implement\w*|fix\w*|test\w*|fixtures?|review\w*|add|update|build)\b/gi
 const LIGHT = /\b(list|read|show|rename|print|count|find|grep|format|typo|log|open|which|where|summari[sz]e)\b/gi
 const DEEP = /\b(plan|architect\w*)\b/i
+// Copywriting: marketing and brand writing, in English and French. Quality of judgement and voice matters more than
+// speed here, so it always gets the strongest tier the router picks by itself, at high effort. Bare "copy" is left
+// out on purpose: "copy the file" is not copywriting.
+const COPY = /(?<![\p{L}\p{N}_])(copywrit\w*|(ad|sales|marketing|web|website|landing|email|ux|product|brand) copy|copy (for|of) (the|a|an|our|my)|rewrite the copy|headlines?|taglines?|slogans?|landing page|product (description|page)s?|newsletters?|subject lines?|email sequence|cold emails?|captions?|tone of voice|brand voice|blog posts?|press release|value proposition|call to action|accroches?|fiches? produit|r[ée]daction|r[ée]dige\w*|page d.accueil|ton de voix|texte (de|pour) (la|le|les|une?|notre|ma|mon))(?![\p{L}\p{N}_])/iu
+export const isCopy = (text: string): boolean => COPY.test(text)
+
+// Copy work is raised to Opus at high effort whoever picked (the rules or Jev). An Explore subagent only reads, so it is left alone.
+export function copyFloor(pick: RoutePick, input: RouteInput): RoutePick {
+  if (!isCopy(input.text) || input.subagentType === "Explore") return pick
+  const rank: Effort[] = ["low", "medium", "high", "xhigh"]
+  return { model: "opus", effort: rank.indexOf(pick.effort) > rank.indexOf("high") && pick.model === "opus" ? pick.effort : "high", conf: Math.max(pick.conf, 0.9) }
+}
+
 const EDITS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']
 const SEARCH = ['Glob', 'Grep', 'Read']
 // The tiers the router scores by itself. Fable is never picked automatically: the user chooses it.
@@ -93,7 +106,7 @@ export function pickRoute(input: RouteInput): RoutePick {
   const margin = (top?.[1] ?? 0) - (second?.[1] ?? 0)
   const conf = Math.min(0.99, Math.max(0.5, 0.5 + 0.5 * (1 - Math.exp(-margin))))
 
-  return { model, effort, conf: Math.round(conf * 100) / 100 }
+  return copyFloor({ model, effort, conf: Math.round(conf * 100) / 100 }, input)
 }
 
 // The effort for a tier chosen by something other than pickRoute (Jev): the same ladder, without the scores
@@ -105,7 +118,7 @@ export function effortFor(model: Model, text: string, subagentType?: string): Ef
 
 // The signals behind a pick, as the band's dim second line: “excerpt” · kw:debug · len 212 · tools Bash·Edit
 export function whyOf(input: RouteInput): string {
-  const kw = (input.text.match(HEAVY) ?? input.text.match(MID) ?? input.text.match(LIGHT) ?? [])[0]?.toLowerCase()
+  const kw = isCopy(input.text) ? 'copy' : (input.text.match(HEAVY) ?? input.text.match(MID) ?? input.text.match(LIGHT) ?? [])[0]?.toLowerCase()
   const excerpt = input.text.replace(/\s+/g, ' ').trim().slice(0, 40)
   const tools = [...new Set(input.tools)].slice(-3)
   return [
