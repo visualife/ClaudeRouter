@@ -7,7 +7,7 @@ import { EFFORTS, type Pin, directiveOf, guard } from './guard'
 import { type Els, type Snapshot, drawBand, drawStrip } from './band'
 import { drawPane } from './pane'
 import { type Anim, animCells } from './pixel'
-import { creativeFloor, creativeOf, effortFor, familyOf, idFor, pickRoute, roleOf, whyOf } from './route'
+import { creativeFloor, creativeOf, effortFor, familyOf, idFor, pickRoute, roleOf } from './route'
 import { attachAgent, addPlugin, bumpMcp, bumpSkill, nameOf, patchAgent, patchTask, toUsage } from './lists'
 
 const PANE = 'agent-ClaudeRouter'
@@ -243,7 +243,9 @@ export const register: Register = on => {
       by,
       engineModel: e.model,
       source: e.agentId ? 'subagent' : 'main',
-      why: (by === 'jev' ? 'jev · ' : '') + whyOf(input) + (guarded.limits.length > 0 ? ` · guard ${guarded.limits.join(',')}` : ''),
+      // The band's second line only appears when something needs explaining: a Jev pick or a guard limit.
+      // The prompt excerpt, keyword, length and tool list (whyOf) are no longer echoed.
+      why: [by === 'jev' ? 'jev' : '', guarded.limits.length > 0 ? `guard ${guarded.limits.join(',')}` : ''].filter(Boolean).join(' · '),
     }
     await update($, route, () => decided)
     if (e.agentId) {
