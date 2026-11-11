@@ -13,6 +13,9 @@ export const DEFAULT_OPTIONS: Options = {
   // A session on a locked model is left alone: no rerouting, no caps. Fable is locked by default.
   locks: ['fable'],
   band: 'full',
+  // Flagship creative work goes to Opus at xhigh; Fable is opt-in (/clauderouter creative fable)
+  creative: 'opus',
+  creativeCap: 'xhigh',
 }
 export const ALL_MODELS: Model[] = ['haiku', 'sonnet', 'opus', 'fable']
 const isModel = (s: string): s is Model => (ALL_MODELS as string[]).includes(s)
@@ -43,6 +46,10 @@ export const USAGE = [
   '/clauderouter budget 3        USD one turn may spend before it is downgraded (off = no limit)',
   '/clauderouter ctx 150k        context size above which requests are downgraded (off = no limit)',
   '/clauderouter band route      band above the prompt: task bar and model route only (full = every row, off = closed)',
+  '/clauderouter creative opus   flagship creative work (identity, naming, taglines, art direction) on Opus xhigh (default)',
+  '/clauderouter creative fable  flagship creative work on Fable high (uses your weekly Fable allowance)',
+  '/clauderouter creative off    route creative prompts like any other',
+  '/clauderouter creative cap high  highest effort creative work may run at (default xhigh)',
   '/clauderouter status          show the current options',
   'Prompt prefix: "@sonnet:med ..." pins that one turn.',
 ].join('\n')
@@ -76,7 +83,7 @@ export function describe(o: Options, now: number): string {
   const pin = o.pin ? `${o.pin}${o.pinEffort ? `/${o.pinEffort}` : ''}` : 'auto'
   const budget = o.budget > 0 ? `$${o.budget}/turn` : 'off'
   const ctx = o.ctxCap > 0 ? `${Math.round(o.ctxCap / 1000)}k` : 'off'
-  return `engine: ${o.engine} · model: ${pin} · locked: ${o.locks.length > 0 ? o.locks.join(', ') : 'none'} · max effort: ${o.maxEffort} · budget: ${budget} · ctx cap: ${ctx} · keep-warm: ${warm}`
+  return `engine: ${o.engine} · model: ${pin} · locked: ${o.locks.length > 0 ? o.locks.join(', ') : 'none'} · max effort: ${o.maxEffort} · creative: ${o.creative}${o.creative === 'off' ? '' : ` (cap ${o.creativeCap})`} · budget: ${budget} · ctx cap: ${ctx} · keep-warm: ${warm}`
 }
 
 // Applies one /clauderouter argument string. next is null when the args are not an option change.
@@ -136,6 +143,17 @@ export function applyArgs(args: string, o: Options, now: number): { next: Option
       const mode = arg.trim().toLowerCase()
       if (mode !== 'full' && mode !== 'route' && mode !== 'off') return { next: null, text: `band takes full, route or off\n${USAGE}` }
       return { next: { ...o, band: mode }, text: `band: ${mode}` }
+    }
+    case 'creative': {
+      const [a = '', b = ''] = arg.trim().toLowerCase().split(/\s+/)
+      if (a === 'cap') {
+        const effort = toEffort(b)
+        if (!effort) return { next: null, text: `creative cap takes ${EFFORTS.join(', ')}\n${USAGE}` }
+        return { next: { ...o, creativeCap: effort }, text: `creative effort ceiling: ${effort}` }
+      }
+      if (a !== 'opus' && a !== 'fable' && a !== 'off') return { next: null, text: `creative takes opus, fable, off or cap <effort>\n${USAGE}` }
+      const said = a === 'off' ? 'creative: off, routed like any other prompt' : `creative: flagship work on ${a === 'fable' ? 'Fable high' : 'Opus xhigh'}, craft on Opus high, bulk on Sonnet high`
+      return { next: { ...o, creative: a }, text: said }
     }
     case 'status':
       return { next: null, text: describe(o, now) }

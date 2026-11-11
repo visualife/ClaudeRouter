@@ -7,7 +7,7 @@ import { EFFORTS, type Pin, directiveOf, guard } from './guard'
 import { type Els, type Snapshot, drawBand, drawStrip } from './band'
 import { drawPane } from './pane'
 import { type Anim, animCells } from './pixel'
-import { copyFloor, effortFor, familyOf, idFor, isCopy, pickRoute, roleOf, whyOf } from './route'
+import { creativeFloor, creativeOf, effortFor, familyOf, idFor, pickRoute, roleOf, whyOf } from './route'
 import { attachAgent, addPlugin, bumpMcp, bumpSkill, nameOf, patchAgent, patchTask, toUsage } from './lists'
 
 const PANE = 'agent-ClaudeRouter'
@@ -35,6 +35,10 @@ let turnTools: string[] = []
 let turnCostStart = 0
 let turnPin: Pin | null = null
 let warned = false
+// The locked model id the router itself last sent on the main thread (Fable for flagship creative work, when
+// /clauderouter creative fable is on). A request arriving on that id is the router's own choice, not the user's,
+// so the lock does not freeze it there.
+let routedLocked: string | null = null
 // When the main thread last sent a request, for keep-warm
 let lastRequestAt: number | null = null
 // explicit: the Agent call named a model. Its requests are then passed through untouched.
@@ -150,24 +154,25 @@ export const register: Register = on => {
   // Runs before each request to the model: picks the model and effort, then records what was chosen
   on('turn.step', async function* ($, e, next) {
     const sub = e.agentId ? subagents.get(e.agentId) : undefined
+    // Options saved by an older version lack the guard fields, or carry the old fableLock flag: normalize fills them in
+    const opts = normalize(await read($, options))
     const input = {
       text: e.agentId ? (sub?.text ?? '') : turnText,
       tools: e.agentId ? [] : turnTools,
       subagentType: sub?.subagentType,
       current: familyOf(e.model),
+      creative: opts.creative,
     }
     let pick = pickRoute(input)
     let by: Route['by'] = 'rules'
     if (!e.agentId) lastRequestAt = await $.clock.now()
-    // Options saved by an older version lack the guard fields, or carry the old fableLock flag: normalize fills them in
-    const opts = normalize(await read($, options))
     // Pass-through: the request keeps the model and effort it arrived with, and the band says why.
     //  - model lock: a main-thread session on a locked model (Fable by default), or on an id the router does not
     //    know, is left alone, unless a pin or an "@model" prefix says otherwise. Without this, the router did not
     //    know Fable and rewrote every request to Sonnet or Haiku.
     //  - a subagent whose Agent call named a model: that choice was explicit, so the router never overrides it.
     const family = familyOf(e.model)
-    const lockMain = !e.agentId && (family === null || opts.locks.includes(family)) && !turnPin && !opts.pin
+    const lockMain = !e.agentId && (family === null || opts.locks.includes(family)) && !turnPin && !opts.pin && e.model !== routedLocked
     // A subagent is left alone when its Agent call named a model, when it inherited a locked parent's model, or
     // when the model it runs on is itself locked
     const lockSub = Boolean(e.agentId) && (sub?.explicit === true || (family !== null && opts.locks.includes(family)))
@@ -199,8 +204,8 @@ export const register: Register = on => {
         await update($, jev, u => ({ calls: (u?.calls ?? 0) + 1, input: asked.input, output: asked.output }))
       }
     }
-    // Copywriting is raised to a strong pick whoever chose (pickRoute already did it for the rules)
-    pick = copyFloor(pick, input)
+    // Creative work is set to its case's tier whoever chose (pickRoute already did it for the rules)
+    pick = creativeFloor(pick, input)
     // Cost guards run last, on whoever picked: they cap what the turn may spend
     const u = await read($, usage)
     const turnCost = u?.cost != null ? Math.max(0, u.cost - turnCostStart) : null
@@ -217,7 +222,8 @@ export const register: Register = on => {
       turnTools,
       contextTokens: u?.context.tokens ?? null,
       turnCost,
-      isCopy: isCopy(input.text) && input.subagentType !== 'Explore',
+      creative: opts.creative === 'off' || input.subagentType === 'Explore' ? null : creativeOf(input.text),
+      creativeCap: opts.creativeCap,
     })
     if (!warned && guarded.limits.some(l => l.startsWith('turn $') || l.startsWith('ctx '))) {
       warned = true
@@ -225,7 +231,9 @@ export const register: Register = on => {
     }
     pick = { ...pick, model: guarded.model, effort: guarded.effort }
     const kept = familyOf(e.model) === pick.model
-    const result = yield* next({ ...e, model: idFor(pick.model, e.model), effort: pick.effort })
+    const sentId = idFor(pick.model, e.model)
+    if (!e.agentId) routedLocked = opts.locks.includes(pick.model) ? sentId : null
+    const result = yield* next({ ...e, model: sentId, effort: pick.effort })
 
     const decided: Route = {
       model: pick.model,
@@ -274,12 +282,12 @@ export const register: Register = on => {
   // Runs when a subagent is about to start. A model the Agent call already named stays as it is.
   on('agent.spawn', async ($, e, next) => {
     const text = `${e.description} ${e.prompt}`
-    const pick = pickRoute({ text, tools: [], subagentType: e.subagentType })
-    // Subagents never start on Opus unless they plan: execution is Sonnet or Haiku
-    const spawnModel = pick.model === 'opus' && e.subagentType !== 'Plan' ? 'sonnet' : pick.model
+    const opts = normalize(await read($, options))
+    const pick = pickRoute({ text, tools: [], subagentType: e.subagentType, creative: opts.creative })
+    // Subagents never start on Opus (or Fable) unless they plan: execution is Sonnet or Haiku
+    const spawnModel = (pick.model === 'opus' || pick.model === 'fable') && e.subagentType !== 'Plan' ? 'sonnet' : pick.model
     // A locked session stays locked, subagents included: one that names no model inherits the parent's model
     // (until /clauderouter unlock). A parent id the router does not know is inherited too: it is never rewritten.
-    const opts = normalize(await read($, options))
     const parentFamily = familyOf(e.parentModel)
     const parentLocked = parentFamily === null || opts.locks.includes(parentFamily)
     const inherit = !e.model && parentLocked

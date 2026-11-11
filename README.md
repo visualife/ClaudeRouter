@@ -27,9 +27,26 @@ Applied on every model request, after the router (or Jev) has picked. Defaults p
 | Context cap | 150k tokens | Over it: Sonnet medium. Over 1.5×: Sonnet low. `/clauderouter ctx 200k` or `off`. |
 | Your choice wins | none | `/clauderouter pin sonnet medium` applies from the **next request, even mid-turn**. `pin auto` releases it. Or prefix one prompt: `@sonnet:med build the app` / `@opus:high ...`. |
 | Model locks | `fable` | A session on a locked model is left alone, subagents included. See **Model locks**. |
-| Copywriting stays strong | on | A copy prompt (headline, tagline, landing page, product description, newsletter, tone of voice, `rédige`, `accroche`, `fiche produit`...) goes to Opus at high effort and stays there for the whole turn, writing included: no plan/execute split, no long-prompt cap. Over the budget or context cap the model drops to Sonnet but the effort stays high. Copy subagents run on Sonnet at high effort. Your effort ceiling, pin and locks still win. |
+| Creative work stays strong | on | Copywriting, art direction and brand work get their own tiers, by case (see **Creative work**). They keep their model for the whole turn: no plan/execute split, no long-prompt cap, and their own effort ceiling (`xhigh`). Over the budget or context cap the model drops to Sonnet, but the effort stays high. Creative subagents run on Sonnet at high effort. Your pin and locks still win. |
 
 The band's second line shows `guard ...` with the reason whenever a limit changed the pick. Budget uses the session cost the engine reports (API-equivalent USD).
+
+## Creative work (v0.4.3)
+
+Copywriting, art direction and brand work are judged on taste and voice, not speed, so the router gives them a stronger model and more effort than code of the same length. The case decides how much:
+
+| Case | Examples (EN / FR) | Model / effort |
+|---|---|---|
+| **Flagship**: work a brand lives with | brand identity, naming, tagline, slogan, manifesto, value proposition, art direction / direction artistique, creative brief, moodboard, key visual, campaign concept, logo concept, color palette, font pairing, video script, storyboard, design critique | **Opus `xhigh`**, or **Fable `high`** with `/clauderouter creative fable` |
+| **Craft**: everyday copy and visual briefs | landing page, product description / fiche produit, newsletter, subject lines, captions, social posts, blog post, press release, image prompts (Midjourney, Magnific, Flux), photo brief, poster, flyer | **Opus `high`** |
+| **Bulk**: volume or adaptation | a whole catalogue or CSV of product sheets, translations / traductions, meta descriptions, alt text, SEO titles | **Sonnet `high`** |
+
+- Volume turns craft into bulk. It turns flagship into craft, not bulk: a translated manifesto still needs care.
+- Creative turns use `creativeCap` (default `xhigh`) as their ceiling instead of `cap`. `/clauderouter creative cap high` lowers it.
+- Fable is opt-in: `/clauderouter creative fable` sends flagship work to Fable 5.2 at `high` (Anthropic's recommended default for it), and craft and bulk stay where they are. Each flagship turn then draws on your weekly Fable allowance. A session the router moved to Fable is not frozen there by the Fable lock: the lock only holds a model *you* chose.
+- `/clauderouter creative off` routes creative prompts like any other.
+- Bare "copy", "design", "script", "naming" and "positionnement" are not creative signals on purpose: "copy the file", "naming conventions", "a bash script" and CSS positioning stay code.
+- The band's second line shows `kw:creative`, `kw:copy` or `kw:copy·bulk`, and `guard flagship: strong` (or `craft`, `bulk`) when the guard kept the model.
 
 ## Model locks (v0.4.1)
 
@@ -56,8 +73,8 @@ The full dashboard is the `/clauderouter` pane: cost, tokens and time, skills, M
 |---|---|---|---|
 | `haiku` | `claude-haiku-5-5` | yes | Light reads, searches, subagents of type Explore. |
 | `sonnet` | `claude-sonnet-5-5` | yes | Default for building and executing. |
-| `opus` | `claude-opus-5-5` | yes | Planning only (see cost guards). |
-| `fable` | `claude-fable-5-2` | never | Locked by default. A session already on Fable 5.1 or 5 keeps its own id; `claude-fable-5-2` is only used when you pin or switch into Fable. |
+| `opus` | `claude-opus-5-5` | yes | Planning, flagship creative work (`xhigh`) and craft copy (`high`). |
+| `fable` | `claude-fable-5-2` | only with `creative fable` | Locked by default. A session already on Fable 5.1 or 5 keeps its own id; `claude-fable-5-2` is only used when you pin or switch into Fable. |
 
 **Fable and your plan** (per [Anthropic's help page](https://support.claude.com/en/articles/15424964-claude-fable-models-on-your-plan), checked 2026-11-09): Fable 5, 5.1 and 5.2 are on all paid plans. Max, Ultra and premium Team/Enterprise seats include Fable in the plan, up to 50% of the weekly limit; Pro and standard seats run Fable on usage credits. The page gives no end date for the plan inclusion; the one dated promotion (Fable 5 only) ended 2026-07-19. Claude Code minimums: Fable 5.2 needs 2.1.321, 5.1 needs 2.1.255. That is why Fable stays locked and is never picked automatically: it eats the weekly limit faster than the other models.
 
@@ -119,6 +136,8 @@ Set them from the prompt; they persist across reloads.
 | `/clauderouter budget <usd\|off>` | Per-turn spend limit. |
 | `/clauderouter ctx <150k\|off>` | Context size limit. |
 | `/clauderouter band <full\|route\|off>` | Band above the prompt: every row, only the task bar and the model route, or closed. The band also has a close control (✕ in the terminal, the native close mark on the desktop) that sets `off`; `band full` brings it back. The pane is separate and stays open. |
+| `/clauderouter creative <opus\|fable\|off>` | Where flagship creative work goes: Opus `xhigh` (default), Fable `high`, or no creative routing. |
+| `/clauderouter creative cap <effort>` | Highest effort creative work may run at (default `xhigh`). |
 | `/clauderouter status` | Show the current options. |
 
 **Jev**: it only chooses the tier; Claude still does the work. Each routed request sends the prompt text (first 4000 characters) to `api.typesafe.ai` and costs one small Jev call (about 0.3 s). In the band, `jev` sits beside `haiku sonnet opus` on the Model route row: lit when Jev made the pick, dim when the rules did. Once Jev has been used, a `Jev · context` bar appears: the last call's input tokens against Jev's 64k per-request window, with the call count. A Jev pick also starts the band's second line with `jev ·`. With no key, an error or a 2.5 s timeout, the rules decide, so nothing blocks.
@@ -151,6 +170,7 @@ Routing lives in `hooks/route.ts`: edit the `HEAVY`, `MID` and `LIGHT` keyword l
 | `hooks/pane.ts` | The `/clauderouter` pane |
 | `hooks/pixel.ts`, `format.ts`, `lists.ts` | Sprites, formatting, list rows |
 | `tests/router.test.ts` | Routing tests |
+| `tests/copy.test.ts` | Creative cases, floor, guard and `creative` options |
 
 ## Notes
 

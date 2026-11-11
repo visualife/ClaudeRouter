@@ -15,6 +15,8 @@ export type RouteInput = {
   tools: readonly string[]
   subagentType?: string
   current?: Model | null
+  // Where flagship creative work goes (/clauderouter creative); opus when unset
+  creative?: CreativeMode
 }
 
 // ponytail: fixed constant; move to $.state config if tuning is wanted
@@ -26,18 +28,71 @@ const HEAVY = /\b(plan|architect\w*|design|debug\w*|trace|root cause|refactor\w*
 const MID = /\b(write|implement\w*|fix\w*|test\w*|fixtures?|review\w*|add|update|build)\b/gi
 const LIGHT = /\b(list|read|show|rename|print|count|find|grep|format|typo|log|open|which|where|summari[sz]e)\b/gi
 const DEEP = /\b(plan|architect\w*)\b/i
-// Copywriting: marketing and brand writing, in English and French. Quality of judgement and voice matters more than
-// speed here, so it always gets the strongest tier the router picks by itself, at high effort. Bare "copy" is left
-// out on purpose: "copy the file" is not copywriting.
-const COPY = /(?<![\p{L}\p{N}_])(copywrit\w*|(ad|sales|marketing|web|website|landing|email|ux|product|brand) copy|copy (for|of) (the|a|an|our|my)|rewrite the copy|headlines?|taglines?|slogans?|landing page|product (description|page)s?|newsletters?|subject lines?|email sequence|cold emails?|captions?|tone of voice|brand voice|blog posts?|press release|value proposition|call to action|accroches?|fiches? produit|r[ée]daction|r[ée]dige\w*|page d.accueil|ton de voix|texte (de|pour) (la|le|les|une?|notre|ma|mon))(?![\p{L}\p{N}_])/iu
-export const isCopy = (text: string): boolean => COPY.test(text)
 
-// Copy work is raised to Opus at high effort whoever picked (the rules or Jev). An Explore subagent only reads, so it is left alone.
-export function copyFloor(pick: RoutePick, input: RouteInput): RoutePick {
-  if (!isCopy(input.text) || input.subagentType === "Explore") return pick
-  const rank: Effort[] = ["low", "medium", "high", "xhigh"]
-  return { model: "opus", effort: rank.indexOf(pick.effort) > rank.indexOf("high") && pick.model === "opus" ? pick.effort : "high", conf: Math.max(pick.conf, 0.9) }
+// Creative work, in English and French. Judgement, taste and voice matter more than speed here, so it gets a strong
+// model at a high effort, scaled to the case:
+//  - flagship: the work a brand lives with (identity, naming, taglines, manifesto, art direction, campaign concepts,
+//    key visuals, logo concepts, scripts). The strongest model at the highest effort.
+//  - craft: everyday copy and visual briefs (product pages, newsletters, posts, image prompts, photo briefs). Opus, high.
+//  - bulk: volume or adaptation (a catalogue of product sheets, translations, meta descriptions, alt text). Sonnet, high.
+// Bare "copy", "design", "script", "naming" and "positionnement" are left out on purpose: "copy the file", "naming
+// conventions", "a bash script" and CSS positioning are not creative work.
+const W = (body: string) => new RegExp(`(?<![\\p{L}\\p{N}_])(?:${body})(?![\\p{L}\\p{N}_])`, 'iu')
+const FLAGSHIP = W([
+  'art direct(?:ion|or)s?', 'direct(?:ion|eur|rice) artistique', 'creative direct(?:ion|or)', 'direction cr[ée]ative',
+  'creative briefs?', 'briefs? cr[ée]atifs?', 'mood ?boards?', 'planches? de tendances?',
+  'brand (?:identity|platform|strategy|story|book|guidelines|naming|names?|positioning|manifesto|universe|concepts?|voice)',
+  'identit[ée] (?:visuelle|de marque)', 'plateforme de marque', 'charte graphique', 'univers de marque', 'r[ée]cit de marque',
+  'brand naming', 'naming (?:for|pour|of|de|du|ideas|options|session)', 'noms? de (?:marque|domaine|produit|gamme)', 'product names?',
+  'manifest[oe]s?', 'taglines?', 'slogans?', 'signature de marque', 'positioning statement', 'positionnement (?:de (?:la )?marque|strat[ée]gique)',
+  'value proposition', 'proposition de valeur', 'big idea', 'campaign (?:concepts?|ideas?|platform)', 'concepts? (?:de campagne|cr[ée]atifs?)',
+  'creative concepts?', 'key visuals?', 'visuels? cl[ée]s?', 'hero (?:section|copy|headline|visual)s?',
+  'logo (?:concepts?|design|direction|ideas?|exploration|redesign)', 'concepts? de logo', 'refonte (?:du|de mon|de notre) logo',
+  '(?:design|create|draw|sketch|cr[ée]e|dessine|imagine) (?:a|an|the|my|our|un|une|le|mon|notre) (?:new |nouveau )?logo',
+  'storyboards?', 'shot lists?', 'd[ée]coupage technique', '(?:video|ad|film|commercial|tv|radio|brand film) scripts?',
+  'scripts? (?:vid[ée]o|pub|publicitaire)', 'voice-?overs?', 'color palettes?', 'palettes? de couleurs?',
+  'font pairings?', 'type (?:pairing|system)s?', 'design critique', 'critique (?:this|my|the|de|du|ma|mon|cette|ce) (?:design|visual|visuel|logo|layout|maquette|affiche|poster|landing)',
+].join('|'))
+const CRAFT = W([
+  'copywrit\\w*', '(?:ad|sales|marketing|web|website|landing|email|ux|product|brand) copy', 'copy (?:for|of) (?:the|a|an|our|my)',
+  'rewrite the copy', 'headlines?', 'landing pages?', 'product (?:descriptions?|pages?)', 'newsletters?', 'subject lines?',
+  'email sequences?', 'cold emails?', 'captions?', 'tone of voice', 'blog posts?', 'press releases?', 'call to action',
+  'accroches?', 'fiches? produits?', 'r[ée]daction', 'r[ée]dige\\w*', 'page d.accueil', 'ton de voix', 'texte (?:de|pour) (?:la|le|les|une?|notre|ma|mon)',
+  'storytelling', 'about page', 'page [àa] propos', '(?:instagram|linkedin|facebook|tiktok|social) (?:posts?|captions?|carousels?|reels?|bios?)',
+  'ad creatives?', 'banni[èe]res?', 'affiches?', 'posters?', 'flyers?', 'brochures?', 'image prompts?', 'prompts? (?:image|midjourney|magnific|flux)',
+  'midjourney', 'photo (?:direction|briefs?|shoots?)', 'direction photo', 'shootings?', 'product photography', 'photographie produit', 'lighting setups?',
+].join('|'))
+// Volume or adaptation. Turns craft into bulk; turns flagship into craft (a translated manifesto still needs care).
+const BULK = W([
+  'translat\\w*', 'tradu\\w*', 'locali[sz]\\w*', 'adapt\\w* (?:to|for|en|pour|au|aux)', 'bulk', 'batch', 'en masse', 'en lot',
+  'csv', 'xlsx', 'spreadsheet', 'tableur', 'catalogu?e', '(?:\\d{2,}|all|every|each|tou(?:te)?s les|chaque) (?:\\S+ ){0,3}(?:products?|produits?|fiches?|skus?|descriptions?|pages?|articles?)',
+].join('|'))
+// Creative only in volume: production text no one writes one by one
+const BULK_ONLY = W(['meta (?:descriptions?|titles?)', 'alt[- ]?texts?', 'textes? alternatifs?', 'balises? (?:title|meta|alt)', 'seo titles?'].join('|'))
+
+export type Creative = 'flagship' | 'craft' | 'bulk'
+// The model flagship creative work goes to. off: creative prompts are routed like any other.
+export type CreativeMode = 'opus' | 'fable' | 'off'
+
+export function creativeOf(text: string): Creative | null {
+  const bulk = BULK.test(text)
+  if (FLAGSHIP.test(text)) return bulk ? 'craft' : 'flagship'
+  if (CRAFT.test(text)) return bulk ? 'bulk' : 'craft'
+  return BULK_ONLY.test(text) ? 'bulk' : null
 }
+export const isCopy = (text: string): boolean => creativeOf(text) !== null
+
+// Creative work is set to its case's tier whoever picked (the rules or Jev). An Explore subagent only reads: left alone.
+export function creativeFloor(pick: RoutePick, input: RouteInput, mode: CreativeMode = input.creative ?? 'opus'): RoutePick {
+  const kind = mode === 'off' || input.subagentType === 'Explore' ? null : creativeOf(input.text)
+  if (!kind) return pick
+  const conf = Math.max(pick.conf, 0.9)
+  if (kind === 'flagship') return mode === 'fable' ? { model: 'fable', effort: 'high', conf } : { model: 'opus', effort: 'xhigh', conf }
+  if (kind === 'craft') return { model: 'opus', effort: pick.model === 'opus' && pick.effort === 'xhigh' ? 'xhigh' : 'high', conf }
+  return { model: 'sonnet', effort: 'high', conf }
+}
+// Kept from 0.4: the copy floor is the creative floor
+export const copyFloor = creativeFloor
 
 const EDITS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']
 const SEARCH = ['Glob', 'Grep', 'Read']
@@ -106,7 +161,7 @@ export function pickRoute(input: RouteInput): RoutePick {
   const margin = (top?.[1] ?? 0) - (second?.[1] ?? 0)
   const conf = Math.min(0.99, Math.max(0.5, 0.5 + 0.5 * (1 - Math.exp(-margin))))
 
-  return copyFloor({ model, effort, conf: Math.round(conf * 100) / 100 }, input)
+  return creativeFloor({ model, effort, conf: Math.round(conf * 100) / 100 }, input)
 }
 
 // The effort for a tier chosen by something other than pickRoute (Jev): the same ladder, without the scores
@@ -118,7 +173,8 @@ export function effortFor(model: Model, text: string, subagentType?: string): Ef
 
 // The signals behind a pick, as the band's dim second line: “excerpt” · kw:debug · len 212 · tools Bash·Edit
 export function whyOf(input: RouteInput): string {
-  const kw = isCopy(input.text) ? 'copy' : (input.text.match(HEAVY) ?? input.text.match(MID) ?? input.text.match(LIGHT) ?? [])[0]?.toLowerCase()
+  const kind = creativeOf(input.text)
+  const kw = kind ? { flagship: 'creative', craft: 'copy', bulk: 'copy·bulk' }[kind] : (input.text.match(HEAVY) ?? input.text.match(MID) ?? input.text.match(LIGHT) ?? [])[0]?.toLowerCase()
   const excerpt = input.text.replace(/\s+/g, ' ').trim().slice(0, 40)
   const tools = [...new Set(input.tools)].slice(-3)
   return [

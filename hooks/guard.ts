@@ -1,5 +1,5 @@
 import type { Effort, Model } from '../types'
-import type { RoutePick } from './route'
+import type { Creative, RoutePick } from './route'
 
 // Cost guards: pure limits applied on top of the router's pick, on every model request.
 // The router decides what a prompt *looks like*; the guard decides what the turn may *cost*.
@@ -43,8 +43,11 @@ export type GuardInput = {
   contextTokens: number | null
   // USD spent since the turn started
   turnCost: number | null
-  // Copywriting: the turn keeps a strong model or, where a limit takes the model down, a strong effort
-  isCopy?: boolean
+  // Creative work (flagship, craft, bulk): the turn keeps a strong model or, where a limit takes the model down,
+  // a high effort. Its effort ceiling is creativeCap, not maxEffort.
+  creative?: Creative | null
+  // Highest effort creative work may run at; xhigh when unset
+  creativeCap?: Effort
 }
 
 export type Guarded = { model: Model; effort: Effort; limits: string[] }
@@ -56,22 +59,26 @@ export function guard(i: GuardInput): Guarded {
   }
   let { model, effort } = i.pick
   const limits: string[] = []
+  const creative = i.creative ?? null
+  // The effort a creative turn keeps where a limit takes it down; any other turn keeps medium
+  const floor: Effort = creative ? 'high' : 'medium'
 
-  if (rankE(effort) > rankE(i.maxEffort)) {
-    effort = i.maxEffort
-    limits.push(`effort≤${i.maxEffort}`)
+  const ceiling = creative ? (i.creativeCap ?? 'xhigh') : i.maxEffort
+  if (rankE(effort) > rankE(ceiling)) {
+    effort = ceiling
+    limits.push(`effort≤${ceiling}`)
   }
 
-  // Plan with Opus, execute with Sonnet
-  if (model === 'opus') {
+  // Plan with Opus, execute with Sonnet. Fable only gets here when the router picked it for flagship creative work.
+  if (model === 'opus' || model === 'fable') {
     const executing = i.turnTools.some(t => WRITES.includes(t)) || i.turnTools.length >= EXEC_TOOLS
     if (i.isSub && !i.isPlan) {
       model = 'sonnet'
-      effort = capEffort(effort, i.isCopy ? 'high' : 'medium')
+      effort = capEffort(effort, floor)
       limits.push('subagent→sonnet')
-    } else if (i.isCopy) {
-      // Copy stays on Opus for the whole turn, writing included: no plan/execute split, no long-prompt cap
-      limits.push('copy: strong')
+    } else if (creative) {
+      // Creative work stays on its model for the whole turn, writing included: no plan/execute split, no long-prompt cap
+      limits.push(`${creative}: strong`)
     } else if (!i.isSub && (i.step >= OPUS_STEPS || executing)) {
       model = 'sonnet'
       effort = capEffort(effort, 'medium')
@@ -82,19 +89,19 @@ export function guard(i: GuardInput): Guarded {
     }
   }
 
-  // A subagent is never above medium unless it plans
-  if (i.isSub && !i.isPlan) effort = capEffort(effort, i.isCopy ? 'high' : 'medium')
+  // A subagent is never above medium (high for creative work) unless it plans
+  if (i.isSub && !i.isPlan) effort = capEffort(effort, floor)
 
   if (i.ctxCap > 0 && i.contextTokens !== null && i.contextTokens > i.ctxCap) {
     model = capModel(model, 'sonnet')
-    // Copy keeps a strong effort even when the model is taken down
-    effort = capEffort(effort, i.isCopy ? 'high' : i.contextTokens > i.ctxCap * 1.5 ? 'low' : 'medium')
+    // Creative work keeps a high effort even when the model is taken down
+    effort = capEffort(effort, creative ? 'high' : i.contextTokens > i.ctxCap * 1.5 ? 'low' : 'medium')
     limits.push(`ctx ${Math.round(i.contextTokens / 1000)}k`)
   }
 
   if (i.budget > 0 && i.turnCost !== null && i.turnCost > i.budget) {
     model = capModel(model, 'sonnet')
-    effort = capEffort(effort, i.isCopy ? 'high' : i.turnCost > i.budget * 2 ? 'low' : 'medium')
+    effort = capEffort(effort, creative ? 'high' : i.turnCost > i.budget * 2 ? 'low' : 'medium')
     limits.push(`turn $${i.turnCost.toFixed(2)}>$${i.budget}`)
   }
   return { model, effort, limits }

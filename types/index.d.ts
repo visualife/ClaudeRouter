@@ -23,6 +23,11 @@ export type Options = {
   locks: Model[]
   // The band above the prompt: 'full' shows every row, 'route' only the task bar and the model route, 'off' closes it
   band: 'full' | 'route' | 'off'
+  // Flagship creative work (identity, naming, taglines, art direction, campaign concepts): Opus at xhigh, Fable at
+  // high, or 'off' to route creative prompts like any other. Craft copy stays on Opus high, bulk on Sonnet high.
+  creative: 'opus' | 'fable' | 'off'
+  // Highest effort creative work may run at. It replaces maxEffort for creative turns.
+  creativeCap: Effort
 }
 
 // The latest routing decision, for the main conversation or one subagent request
