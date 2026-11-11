@@ -122,8 +122,12 @@ export const register: Register = on => {
       if (next) await update($, options, () => next)
       return { text }
     }
+    // A bare /clauderouter also brings back a band that was closed with the ✕, so it can never be lost
+    const o = normalize(await read($, options))
+    const restored = o.band === 'off'
+    if (restored) await update($, options, () => ({ ...o, band: 'full' as const }))
     await $.ui.open({ id: PANE, title: 'ClaudeRouter', rows: 24, closeOnEscape: true })
-    return {}
+    return restored ? { text: 'ClaudeRouter band restored: /clauderouter band off closes it' } : {}
   })
 
   // Runs when a turn begins: a new task row, named by the prompt

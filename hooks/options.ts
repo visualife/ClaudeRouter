@@ -32,7 +32,7 @@ const WARM_DEFAULT_MS = 2 * 60 * 60 * 1000
 const WARM_MAX_MS = 6 * 60 * 60 * 1000
 
 export const USAGE = [
-  '/clauderouter                 open the pane',
+  '/clauderouter                 open the pane, and bring back a closed band',
   '/clauderouter engine jev      let Jev pick the model tier (needs TYPESAFE_API_KEY)',
   '/clauderouter engine rules    use the local keyword rules (default)',
   '/clauderouter warm [2h]       keep the prompt cache warm for 2h (max 6h)',
