@@ -184,66 +184,101 @@ function taskRows(els: Els, t: Snapshot, task: Task): RenderElement[] {
   return [head, ...agents]
 }
 
-function meterRow(els: Els, t: Snapshot, glyph: string, name: string, detail: string, key: string, pct: number | null, accent: number): RenderElement {
-  // No reading means an empty track, never a shimmer or an invented figure
-  return row(els, [label(els, glyph, name), bar(els, key, t, barWidth(t), 'run', pct ?? 0, accent), els.Text({ children: [detail] })])
+// Compact layout: related facts share a row, so the whole band fits without scrolling and no row is mostly empty.
+const HALF = (t: Snapshot) => Math.max(26, Math.floor((t.columns - 2) / 2))
+const CELL_LABEL = 10
+
+// A connector named by a UUID (claude.ai connectors) is shown by its first 8 characters
+const serverName = (s: string) => (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(s) ? s.slice(0, 8) : fmtFit(s.replace(/^plugin:/, ''), 16))
+
+// Half a row: a short label, a bar, the figure. No reading means an empty track, never a shimmer or an invented figure.
+function meterCell(els: Els, t: Snapshot, glyph: string, name: string, detail: string, key: string, pct: number | null, accent: number): RenderElement {
+  const width = HALF(t)
+  const bw = Math.max(6, Math.min(14, width - CELL_LABEL - detail.length - 4))
+  return els.Box({
+    width,
+    flexDirection: 'row',
+    alignItems: 'center',
+    columnGap: 1,
+    children: [
+      els.Box({ width: CELL_LABEL, children: [els.Text({ children: [`${glyph} ${name}`], color: 'subtle' })] }),
+      bar(els, key, t, bw, 'run', pct ?? 0, accent),
+      els.Text({ children: [detail] }),
+    ],
+  })
 }
 
-function listRow(els: Els, glyph: string, name: string, items: string[], empty: string, total: string): RenderElement {
+function listCell(els: Els, t: Snapshot, glyph: string, name: string, items: string[], empty: string, total: string): RenderElement {
   const { Text } = els
-  return row(els, [
-    label(els, glyph, name),
-    ...(items.length > 0 ? items.map(s => Text({ children: [s] })) : [Text({ children: [empty], color: 'subtle' })]),
-    Text({ children: [total], color: 'subtle' }),
-  ])
+  return els.Box({
+    width: HALF(t),
+    flexDirection: 'row',
+    columnGap: 1,
+    children: [
+      Text({ children: [`${glyph} ${name}`], color: 'subtle' }),
+      ...(items.length > 0 ? items.map(s => Text({ children: [s] })) : [Text({ children: [empty], color: 'subtle' })]),
+      Text({ children: [total], color: 'subtle' }),
+    ],
+  })
 }
 
-// Skills, MCP, plugins, context and plan usage: shared by the band and the pane
+// Skills, MCP, plugins, context and plan usage: shared by the band and the pane. Seven rows became five.
 export function factRows(els: Els, t: Snapshot): RenderElement[] {
-  const extra = t.plugins.length - 5
+  const extra = t.plugins.length - 2
   const ctx = t.usage?.context ?? null
   const five = t.usage?.rateLimits.find(r => r.kind === 'five_hour')
   const week = t.usage?.rateLimits.find(r => r.kind === 'seven_day')
   const calls = t.mcp.reduce((n, m) => n + m.calls, 0)
+  // Two columns, four rows: Skills | Plugins, MCP | Keep warm, Context | Session, Weekly | Fable. Jev adds a fifth row only once it is used.
   return [
-    listRow(els, '✦', 'Skills', t.skills.slice(-4).map(s => `${s.name} used ×${s.uses}`), 'none used yet', `${t.skills.length} used`),
-    listRow(els, '◇', 'MCP', t.mcp.slice(-3).map(m => `${m.server} · ${m.tool} ×${m.calls}`), 'no calls yet', `${calls} calls`),
-    listRow(els, '▣', 'Plugins', [...t.plugins.slice(-5), ...(extra > 0 ? [`+${extra}`] : [])], 'none seen', `${t.plugins.length} mods`),
-    meterRow(els, t, '◆', 'Context', ctx ? `${fmtTokens(ctx.tokens)} / ${fmtTokens(ctx.window)} · ${fmtPct(ctx.percent)}` : '—', 'context', ctx?.percent ?? null, ACCENT.brand),
-    ...(t.jev
-      ? [meterRow(els, t, '◈', 'Jev · context', `${fmtTokens(t.jev.input)} / ${fmtTokens(JEV_WINDOW)} · ${fmtPct((t.jev.input / JEV_WINDOW) * 100)} · ${t.jev.calls} calls`, 'jev', (t.jev.input / JEV_WINDOW) * 100, ACCENT.brand)]
-      : []),
-    meterRow(els, t, '◷', 'Session · 5h', five ? `5h · ${fmtPct(five.percentUsed)} used` : 'no reading', 'session', five?.percentUsed ?? null, ACCENT.sonnet),
-    meterRow(els, t, '◷', 'Weekly · 7d', week ? `7d · ${fmtPct(week.percentUsed)} used` : 'no reading', 'weekly', week?.percentUsed ?? null, ACCENT.opus),
-    fableRow(els, t),
-    warmRow(els, t),
+    row(els, [
+      listCell(els, t, '✦', 'Skills', t.skills.slice(-1).map(s => `${fmtFit(s.name, 18)} ×${s.uses}`), 'none yet', `${t.skills.length} used`),
+      listCell(els, t, '▣', 'Plugins', [...t.plugins.slice(-2).map(x => fmtFit(x, 14)), ...(extra > 0 ? [`+${extra}`] : [])], 'none', `${t.plugins.length} mods`),
+    ]),
+    row(els, [
+      listCell(els, t, '◇', 'MCP', t.mcp.slice(-1).map(m => `${serverName(m.server)} · ${fmtFit(m.tool, 14)} ×${m.calls}`), 'no calls yet', `${calls} calls`),
+      warmCell(els, t),
+    ]),
+    row(els, [
+      meterCell(els, t, '◆', 'Context', ctx ? `${fmtTokens(ctx.tokens)}/${fmtTokens(ctx.window)} ${fmtPct(ctx.percent)}` : '—', 'context', ctx?.percent ?? null, ACCENT.brand),
+      meterCell(els, t, '◷', 'Session', five ? fmtPct(five.percentUsed) : '—', 'session', five?.percentUsed ?? null, ACCENT.sonnet),
+    ]),
+    row(els, [
+      meterCell(els, t, '◷', 'Weekly', week ? fmtPct(week.percentUsed) : '—', 'weekly', week?.percentUsed ?? null, ACCENT.opus),
+      fableCell(els, t),
+    ]),
+    ...(t.jev ? [row(els, [jevCell(els, t.jev)])] : []),
   ]
 }
 
 // Fable usage. The engine reports no Fable window of its own today (only five_hour, seven_day and a gateway spend
 // limit), so this shows what is measured here: the share of this session's tokens that ran on Fable. If a window
 // whose kind names Fable ever arrives, that reading is shown instead.
-function fableRow(els: Els, t: Snapshot): RenderElement {
+function fableCell(els: Els, t: Snapshot): RenderElement {
   const limit = t.usage?.rateLimits.find(r => /fable/i.test(r.kind))
-  if (limit) return meterRow(els, t, '✧', 'Fable · plan', `${fmtPct(limit.percentUsed)} used`, 'fable', limit.percentUsed, ACCENT.fable)
+  if (limit) return meterCell(els, t, '✧', 'Fable', fmtPct(limit.percentUsed), 'fable', limit.percentUsed, ACCENT.fable)
   const on = (m: string | null) => m !== null && familyOf(m) === 'fable'
   const used = t.tasks.reduce((n, task) => n + (on(task.model) ? (task.tokens ?? 0) : 0) + task.agents.reduce((k, a) => k + (on(a.model) ? a.tokens : 0), 0), 0)
   const total = t.totals.tokens
   const pct = total > 0 ? Math.min(100, (used / total) * 100) : null
-  const detail = pct === null ? 'no reading' : `${fmtTokens(used)} / ${fmtTokens(total)} · ${fmtPct(pct)} of session`
-  return meterRow(els, t, '✧', 'Fable · session', detail, 'fable', pct, ACCENT.fable)
+  return meterCell(els, t, '✧', 'Fable', pct === null ? '—' : `${fmtPct(pct)} of session`, 'fable', pct, ACCENT.fable)
+}
+
+// Jev's last call against its own window, as text: no bar, so the row stays short
+function jevCell(els: Els, jev: JevUse): RenderElement {
+  return els.Text({ children: [`◈ Jev ${fmtTokens(jev.input)}/${fmtTokens(JEV_WINDOW)} · ${jev.calls} calls`], color: 'subtle' })
 }
 
 // The keep-warm clock: time left in the window, and the countdown to the next cache ping
-function warmRow(els: Els, t: Snapshot): RenderElement {
+function warmCell(els: Els, t: Snapshot): RenderElement {
   const w = t.warm
-  if (!w) return row(els, [label(els, '♨', 'Keep warm'), els.Text({ children: ['off · /clauderouter warm 2h'], color: 'subtle' })])
+  if (!w) return els.Text({ children: ['♨ Keep warm off · /clauderouter warm 2h'], color: 'subtle' })
   const left = `${fmtTime(Math.max(0, w.until - t.now) / 1000)} left`
   const ping =
-    w.pingAt === null ? 'first ping 50 min after your next request'
+    w.pingAt === null ? 'ping after your next request'
     : w.pingAt <= t.now ? 'ping due when idle'
-    : `next ping in ${fmtTime((w.pingAt - t.now) / 1000)}`
-  return row(els, [label(els, '♨', 'Keep warm'), els.Text({ children: [`on · ${left} · ${ping}`], color: 'success' })])
+    : `ping in ${fmtTime((w.pingAt - t.now) / 1000)}`
+  return els.Text({ children: [`♨ Keep warm on · ${left} · ${ping}`], color: 'success' })
 }
 
 // The task bar: ● name, a sparkle bar with a "Tasks done/total" pill, the percent, a crab and the agent count.
