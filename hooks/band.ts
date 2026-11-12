@@ -72,7 +72,9 @@ export function bar(els: Els, key: string, t: Snapshot, width: number, tone: Ton
   const line = barLine(width, tone, pct, accent)
   const cells = label ? (pillRows([line], label, accent, filledOf(width, pct))[0] ?? line) : line
   // One line tall on both surfaces: the Raster in the terminal, Text runs at the normal size on the desktop
-  return t.terminal ? els.Raster({ key, columns: width, rows: 1, cells: packCells([cells]) }) : runs(els, cells, false)
+  // A 1px black contour around the bar (a single-line border in the terminal)
+  const inner = t.terminal ? els.Raster({ key, columns: width, rows: 1, cells: packCells([cells]) }) : runs(els, cells, false)
+  return els.Box({ borderStyle: 'single', borderColor: '#000000', children: [inner] })
 }
 
 // How far a task is, from what is measured: finished subagents over all of them; a finished task is 100%;
