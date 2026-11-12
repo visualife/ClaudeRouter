@@ -5,7 +5,7 @@
     {
       "name": "agent-ClaudeRouter",
       "source": "./",
-      "description": "Routes each request to haiku/sonnet/opus, live band above the prompt, /clauderouter pane.",
+      "description": "Routes each request to haiku/sonnet/opus, live band above the prompt, /cr pane.",
       "version": "0.4.5"
     }
   ]

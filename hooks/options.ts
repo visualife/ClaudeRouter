@@ -13,7 +13,7 @@ export const DEFAULT_OPTIONS: Options = {
   // A session on a locked model is left alone: no rerouting, no caps. Fable is locked by default.
   locks: ['fable'],
   band: 'full',
-  // Flagship creative work goes to Opus at xhigh; Fable is opt-in (/clauderouter creative fable)
+  // Flagship creative work goes to Opus at xhigh; Fable is opt-in (/cr creative fable)
   creative: 'opus',
   creativeCap: 'xhigh',
 }
@@ -32,27 +32,32 @@ const WARM_DEFAULT_MS = 2 * 60 * 60 * 1000
 const WARM_MAX_MS = 6 * 60 * 60 * 1000
 
 export const USAGE = [
-  '/clauderouter                 open the pane, and bring back a closed band',
-  '/clauderouter engine jev      let Jev pick the model tier (needs TYPESAFE_API_KEY)',
-  '/clauderouter engine rules    use the local keyword rules (default)',
-  '/clauderouter warm [2h]       keep the prompt cache warm for 2h (max 6h)',
-  '/clauderouter warm off        stop keeping it warm',
-  '/clauderouter pin sonnet [medium]  force a model (and effort) from the next request, even mid-turn',
-  '/clauderouter pin auto        let the router decide again',
-  '/clauderouter pin fable [high]  force Fable (also "@fable ..." for one prompt)',
-  '/clauderouter lock opus       leave a session on that model alone: no rerouting, no caps (fable is locked by default)',
-  '/clauderouter unlock opus     route that model like the others again; "lock all" / "lock none" for every model',
-  '/clauderouter cap high        highest effort the router may pick by itself (default high)',
-  '/clauderouter budget 3        USD one turn may spend before it is downgraded (off = no limit)',
-  '/clauderouter ctx 150k        context size above which requests are downgraded (off = no limit)',
-  '/clauderouter band route      band above the prompt: task bar and model route only (full = every row, off = closed)',
-  '/clauderouter creative opus   flagship creative work (identity, naming, taglines, art direction) on Opus xhigh (default)',
-  '/clauderouter creative fable  flagship creative work on Fable high (uses your weekly Fable allowance)',
-  '/clauderouter creative off    route creative prompts like any other',
-  '/clauderouter creative cap high  highest effort creative work may run at (default xhigh)',
-  '/clauderouter status          show the current options',
+  '/cr                 open the pane, and bring back a closed band',
+  '/cr-engine jev      let Jev pick the model tier (needs TYPESAFE_API_KEY)',
+  '/cr-engine rules    use the local keyword rules (default)',
+  '/cr-warm [2h]       keep the prompt cache warm for 2h (max 6h)',
+  '/cr-warm off        stop keeping it warm (/cr-kw is the short form)',
+  '/cr-pin sonnet [medium]  force a model (and effort) from the next request, even mid-turn',
+  '/cr-pin auto        let the router decide again',
+  '/cr-pin fable [high]  force Fable (also "@fable ..." for one prompt)',
+  '/cr-lock opus       leave a session on that model alone: no rerouting, no caps (fable is locked by default)',
+  '/cr-unlock opus     route that model like the others again; "/cr-lock all" / "/cr-lock none" for every model',
+  '/cr-cap high        highest effort the router may pick by itself (default high)',
+  '/cr-budget 3        USD one turn may spend before it is downgraded (off = no limit)',
+  '/cr-ctx 150k        context size above which requests are downgraded (off = no limit)',
+  '/cr-band route      band above the prompt: task bar and model route only (full = every row, off = closed)',
+  '/cr-creative opus   flagship creative work (identity, naming, taglines, art direction) on Opus xhigh (default)',
+  '/cr-creative fable  flagship creative work on Fable high (uses your weekly Fable allowance)',
+  '/cr-creative off    route creative prompts like any other',
+  '/cr-creative cap high  highest effort creative work may run at (default xhigh)',
+  '/cr-status          show the current options',
   'Prompt prefix: "@sonnet:med ..." pins that one turn.',
 ].join('\n')
+
+// One slash command per option: /cr-warm 2h runs applyArgs('warm 2h'). The bare /cr opens the pane.
+export const OPTION_COMMANDS = ['engine', 'warm', 'pin', 'lock', 'unlock', 'cap', 'budget', 'ctx', 'band', 'creative', 'status'] as const
+// Short names: /cr-kw is /cr-warm
+export const OPTION_ALIASES: Record<string, (typeof OPTION_COMMANDS)[number]> = { kw: 'warm' }
 
 // "90m", "2h", "45" (minutes) -> ms, or null
 export function parseWindow(s: string): number | null {
@@ -86,7 +91,7 @@ export function describe(o: Options, now: number): string {
   return `engine: ${o.engine} · model: ${pin} · locked: ${o.locks.length > 0 ? o.locks.join(', ') : 'none'} · max effort: ${o.maxEffort} · creative: ${o.creative}${o.creative === 'off' ? '' : ` (cap ${o.creativeCap})`} · budget: ${budget} · ctx cap: ${ctx} · keep-warm: ${warm}`
 }
 
-// Applies one /clauderouter argument string. next is null when the args are not an option change.
+// Applies one /cr argument string. next is null when the args are not an option change.
 export function applyArgs(args: string, o: Options, now: number): { next: Options | null; text: string } {
   const [cmd = '', ...rest] = args.trim().split(/\s+/)
   const arg = rest.join(' ')

@@ -2,13 +2,15 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { Agent, Effort, Model, Route, Task } from '../types'
 import { JEV_TIMEOUT_MS, type JevPick, askJev } from './jev'
-import { DEFAULT_OPTIONS, WARM_EVERY_MS, applyArgs, normalize } from './options'
+import { DEFAULT_OPTIONS, OPTION_ALIASES, OPTION_COMMANDS, WARM_EVERY_MS, applyArgs, normalize } from './options'
 import { EFFORTS, type Pin, directiveOf, guard } from './guard'
 import { type Els, type Snapshot, drawBand, drawStrip } from './band'
 import { drawPane } from './pane'
 import { type Anim, animCells } from './pixel'
 import { carriesOn, creativeFloor, creativeOf, effortFor, familyOf, idFor, isPlanner, pickRoute, roleOf } from './route'
 import { attachAgent, addPlugin, bumpMcp, bumpSkill, nameOf, patchAgent, patchTask, toUsage } from './lists'
+
+const COMMANDS: [string, string][] = [...OPTION_COMMANDS.map(c => [c, c] as [string, string]), ...Object.entries(OPTION_ALIASES)]
 
 const PANE = 'agent-ClaudeRouter'
 
@@ -31,12 +33,11 @@ let terminal = false
 let turnId = ''
 let turnText = ''
 let turnTools: string[] = []
-// Cost guards: the session cost when this turn began, a "@model:effort" prompt prefix, and one warning per turn
+// Cost guards: the session cost when this turn began, and a "@model:effort" prompt prefix
 let turnCostStart = 0
 let turnPin: Pin | null = null
-let warned = false
 // The locked model id the router itself last sent on the main thread (Fable for flagship creative work, when
-// /clauderouter creative fable is on). A request arriving on that id is the router's own choice, not the user's,
+// /cr-creative fable is on). A request arriving on that id is the router's own choice, not the user's,
 // so the lock does not freeze it there.
 let routedLocked: string | null = null
 // When the main thread last sent a request, for keep-warm
@@ -79,11 +80,10 @@ async function snapshot($: EngineInterface, surface: string, columns: number, ro
 export const register: Register = on => {
   // Runs before your first prompt, and again after a reload
   on('session.start', async ($, e, next) => {
-    await $.command.register({
-      name: 'clauderouter',
-      description: 'Open ClaudeRouter: cost, tokens, time, running and finished agents',
-      immediate: true,
-    })
+    await $.command.register({ name: 'cr', description: 'Open ClaudeRouter: cost, tokens, time, running and finished agents', immediate: true })
+    for (const [name, sub] of COMMANDS) {
+      await $.command.register({ name: `cr-${name}`, description: `ClaudeRouter: ${sub === name ? sub : `${sub} (short: ${name})`} (/cr-${name} with no argument shows its usage)`, immediate: true })
+    }
     // The dashboard opens as a pane, taller than the default and draggable by the person; the band above the prompt keeps the route only
     void $.ui.open({ id: PANE, title: 'ClaudeRouter', rows: 24, closeOnEscape: true }).catch(() => undefined)
     const raw = await $.session.usage()
@@ -121,20 +121,24 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // Runs when you type /ClaudeRouter. Opening the pane draws nothing by itself; ui.render fills it.
-  on('command.run', { command: 'clauderouter' }, async ($, e) => {
-    if (e.args.trim()) {
+  // Runs when you type /cr-<option>: /cr-warm 2h is the option 'warm' with the argument '2h'
+  for (const [name, sub] of COMMANDS) {
+    on('command.run', { command: `cr-${name}` }, async ($, e) => {
       const now = await $.clock.now()
-      const { next, text } = applyArgs(e.args, normalize(await read($, options)), now)
+      const { next, text } = applyArgs(`${sub} ${e.args}`, normalize(await read($, options)), now)
       if (next) await update($, options, () => next)
       return { text }
-    }
-    // A bare /clauderouter also brings back a band that was closed with the ✕, so it can never be lost
+    })
+  }
+
+  // Runs when you type /cr. Opening the pane draws nothing by itself; ui.render fills it.
+  on('command.run', { command: 'cr' }, async ($, e) => {
+    // A bare /cr also brings back a band that was closed with the ✕, so it can never be lost
     const o = normalize(await read($, options))
     const restored = o.band === 'off'
     if (restored) await update($, options, () => ({ ...o, band: 'full' as const }))
     await $.ui.open({ id: PANE, title: 'ClaudeRouter', rows: 24, closeOnEscape: true })
-    return restored ? { text: 'ClaudeRouter band restored: /clauderouter band off closes it' } : {}
+    return restored ? { text: 'ClaudeRouter band restored: /cr-band off closes it' } : {}
   })
 
   // Runs when a turn begins: a new task row, named by the prompt
@@ -144,7 +148,6 @@ export const register: Register = on => {
     turnText = e.text
     turnTools = []
     turnPin = directiveOf(e.text)
-    warned = false
     prevRoute = lastMain
     jevMemo.clear()
     turnCostStart = (await read($, usage))?.cost ?? 0
@@ -247,12 +250,6 @@ export const register: Register = on => {
       creative: opts.creative === 'off' || input.subagentType === 'Explore' ? null : creativeOf(input.text),
       creativeCap: opts.creativeCap,
     })
-    if (!warned && guarded.limits.some(l => l.startsWith('turn $') || l.startsWith('ctx '))) {
-      warned = true
-      // Over the context cap the model swap halves the rate; /compact or /clear cuts the tokens every request re-reads
-      const tip = guarded.limits.some(l => l.startsWith('ctx ')) ? ' /compact (or /clear between tasks) shrinks every request.' : ''
-      $.ui.toast(`ClaudeRouter: ${guarded.limits.join(', ')}. Downgraded to ${guarded.model}/${guarded.effort}.${tip}`)
-    }
     pick = { ...pick, model: guarded.model, effort: guarded.effort }
     const kept = familyOf(e.model) === pick.model
     const sentId = idFor(pick.model, e.model)
@@ -316,7 +313,7 @@ export const register: Register = on => {
     // Subagents never start on Opus (or Fable) unless they plan: execution is Sonnet or Haiku
     const spawnModel = (pick.model === 'opus' || pick.model === 'fable') && !isPlanner(e.subagentType) ? 'sonnet' : pick.model
     // A locked session stays locked, subagents included: one that names no model inherits the parent's model
-    // (until /clauderouter unlock). A parent id the router does not know is inherited too: it is never rewritten.
+    // (until /cr-unlock). A parent id the router does not know is inherited too: it is never rewritten.
     const parentFamily = familyOf(e.parentModel)
     const parentLocked = parentFamily === null || opts.locks.includes(parentFamily)
     const inherit = !e.model && parentLocked
@@ -370,7 +367,7 @@ export const register: Register = on => {
     const snap = await snapshot($, e.surface, e.props.bodyColumns, e.props.maxRows)
     terminal = snap.terminal
     const { band } = normalize(await read($, options))
-    // Closed: nothing above the prompt until `/clauderouter band full` (or `route`)
+    // Closed: nothing above the prompt until `/cr-band full` (or `route`)
     if (band === 'off') return next(e)
     const els = $.ui.resolve(e) as Els
     const tree = band === 'route' ? drawStrip(els, snap) : drawBand(els, snap)
@@ -384,7 +381,7 @@ export const register: Register = on => {
       role: 'dismiss',
       onPress: () => {
         void update($, options, o => ({ ...normalize(o), band: 'off' as const }))
-        void $.ui.toast('ClaudeRouter band closed. /clauderouter band full brings it back.')
+        void $.ui.toast('ClaudeRouter band closed. /cr-band full brings it back (or /cr).')
       },
     })
     return els.Box({ flexDirection: 'row', columnGap: 2, children: [tree, close] })

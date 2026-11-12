@@ -272,7 +272,7 @@ function jevCell(els: Els, jev: JevUse): RenderElement {
 // The keep-warm clock: time left in the window, and the countdown to the next cache ping
 function warmCell(els: Els, t: Snapshot): RenderElement {
   const w = t.warm
-  if (!w) return els.Text({ children: ['♨ Keep warm off · /clauderouter warm 2h'], color: 'subtle' })
+  if (!w) return els.Text({ children: ['♨ Keep warm off · /cr-warm 2h'], color: 'subtle' })
   const left = `${fmtTime(Math.max(0, w.until - t.now) / 1000)} left`
   const ping =
     w.pingAt === null ? 'ping after your next request'
@@ -329,7 +329,7 @@ export function drawStrip(els: Els, t: Snapshot): RenderElement {
     children: [
       ...taskBar(els, t),
       ...(t.route ? routeRows(els, t.route) : [row(els, [label(els, '⇄', 'Model route'), Text({ children: ['waiting for the first request'], color: 'subtle' })])]),
-      row(els, [Text({ children: ['ClaudeRouter pane: /clauderouter'], color: 'subtle', dimColor: true })]),
+      row(els, [Text({ children: ['ClaudeRouter pane: /cr'], color: 'subtle', dimColor: true })]),
     ],
   })
 }

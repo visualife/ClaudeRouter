@@ -121,7 +121,7 @@ test('the guard keeps creative work strong, with its own effort ceiling', () => 
   expect(guard({ ...flagship, pin: { model: 'haiku', effort: null } }).model).toBe('haiku')
 })
 
-test('/clauderouter creative sets the flagship model and the creative ceiling', () => {
+test('/cr-creative sets the flagship model and the creative ceiling', () => {
   expect(DEFAULT_OPTIONS).toMatchObject({ creative: 'opus', creativeCap: 'xhigh' })
   // options saved by 0.4.2 get the creative defaults
   expect(normalize({ engine: 'rules' })).toMatchObject({ creative: 'opus', creativeCap: 'xhigh' })

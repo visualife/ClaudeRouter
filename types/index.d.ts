@@ -6,7 +6,7 @@ export type Effort = 'low' | 'medium' | 'high' | 'xhigh'
 // Who picks the tier: the local keyword rules, or Jev (falls back to the rules when it is unreachable)
 export type Engine = 'rules' | 'jev'
 
-// The user's switches, set with /clauderouter. warmUntil is a clock time in ms; 0 means keep-warm is off.
+// The user's switches, set with /cr-* commands. warmUntil is a clock time in ms; 0 means keep-warm is off.
 // pin/pinEffort: a model (and effort) forced on every main-thread request; null = the router decides.
 // maxEffort: the highest effort the router may pick by itself. budget: USD one turn may spend before it is
 // downgraded (0 = off). ctxCap: context tokens above which requests are downgraded (0 = off).

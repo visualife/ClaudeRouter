@@ -121,7 +121,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await band.unmount()
 
     // `band route`: only the task bar and the model route stay above the prompt
-    await $.command.run({ command: 'clauderouter', args: 'band route', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+    await $.command.run({ command: 'cr-band', args: 'route', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
     const slim = await $.ui.mount({ plugin: PLUGIN, surface, component: 'AbovePrompt', props: BAND })
     expect(await slim.find({ text: /Model route/ })).toBeDefined()
     expect(await slim.find({ text: /×1/ })).toBeDefined()
@@ -195,7 +195,7 @@ test('Jev failures all return null so the rules take over', async () => {
   expect(await askJev(async () => ({ ok: true, text: 'not json' }), 'k', INPUT)).toBe(null)
 })
 
-test('/clauderouter options: engine and keep-warm', () => {
+test('/cr: options: engine and keep-warm', () => {
   const jev = applyArgs('engine jev', DEFAULT_OPTIONS, 0)
   expect(jev.next?.engine).toBe('jev')
   expect(applyArgs('engine gpt', DEFAULT_OPTIONS, 0).next).toBe(null)
@@ -220,7 +220,7 @@ async function warmWorld($: any, on: On, answers: boolean[]) {
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
   })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await $.command.run({ command: 'clauderouter', args: 'warm 3h', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  await $.command.run({ command: 'cr-warm', args: '3h', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
   await $.turn.start({ turnId: 't1', text: 'list the files' })
   for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-sonnet-5-5', effort: 'low', messageCount: 1 })) { /* drain */ }
   await $.turn.complete({ turnId: 't1', reason: 'answer', isAborted: false, durationMs: 300, answer: '' })
@@ -255,7 +255,7 @@ test('a failed ping closes the keep-warm window', { timeoutMs: 120_000 }, async 
 
 test('keep-warm off sends no ping', { timeoutMs: 120_000 }, async ($, on) => {
   const { clock, forks } = await warmWorld($, on, [])
-  await $.command.run({ command: 'clauderouter', args: 'warm off', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  await $.command.run({ command: 'cr-warm', args: 'off', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
   await idle(clock, 120)
   expect(forks()).toBe(0)
 })
@@ -273,7 +273,7 @@ test('with the Jev engine the band lights jev and draws its context bar', async 
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
   })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  await $.command.run({ command: 'clauderouter', args: 'engine jev', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  await $.command.run({ command: 'cr-engine', args: 'jev', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
   await $.turn.start({ turnId: 't1', text: 'list the files' })
   for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-sonnet-5-5', effort: 'low', messageCount: 1 })) { /* drain */ }
   const band = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: PLUGIN, props: PANE })
@@ -286,10 +286,10 @@ test('the pane shows the keep-warm clock: off by default, a countdown once a win
   world(on)
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const off = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: PLUGIN, props: PANE })
-  expect(await off.find({ type: 'Text', text: /off · \/clauderouter warm 2h/ })).toBeTruthy()
+  expect(await off.find({ type: 'Text', text: /off · \/cr-warm 2h/ })).toBeTruthy()
   await off.unmount()
 
-  await $.command.run({ command: 'clauderouter', args: 'warm 2h', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  await $.command.run({ command: 'cr-warm', args: '2h', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
   const onPane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: PLUGIN, props: PANE })
   expect(await onPane.find({ type: 'Text', text: /on · 1(19|20):\d\d left · first ping 50 min after your next request/ })).toBeTruthy()
   await onPane.unmount()
@@ -297,7 +297,6 @@ test('the pane shows the keep-warm clock: off by default, a countdown once a win
 
 test('the band has a close control: pressing it closes the band, and band full brings it back', async ($, on) => {
   world(on)
-  on('ui.toast', () => ({ value: {} }))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const band = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'AbovePrompt', props: BAND })
   expect(await band.find({ type: 'Button', text: /Close ClaudeRouter/ })).toBeDefined()
@@ -309,7 +308,7 @@ test('the band has a close control: pressing it closes the band, and band full b
   expect(await closed.find({ text: /Model route/ })).toBeUndefined()
   await closed.unmount()
 
-  await $.command.run({ command: 'clauderouter', args: 'band full', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  await $.command.run({ command: 'cr-band', args: 'full', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
   const back = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'AbovePrompt', props: BAND })
   expect(await back.find({ text: /Model route/ })).toBeDefined()
   await back.unmount()
@@ -413,7 +412,7 @@ test('Jev is asked once per turn, not before every request, and not about a prom
     return STEP_DONE(e)
   })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  await $.command.run({ command: 'clauderouter', args: 'engine jev', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  await $.command.run({ command: 'cr-engine', args: 'jev', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
   await $.turn.start({ turnId: 't1', text: 'fix the login bug' })
   for (const index of [0, 1, 2]) {
     for await (const _ of $.turn.step({ turnId: 't1', index, model: 'claude-sonnet-5-5', effort: 'medium', messageCount: 1 + index })) { /* drain */ }

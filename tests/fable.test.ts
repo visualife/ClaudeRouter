@@ -57,7 +57,7 @@ test('@fable pins one prompt', () => {
   expect(directiveOf('@fable:med write the page')).toEqual({ model: 'fable', effort: 'medium' })
 })
 
-test('/clauderouter band: full by default, route for the one-line band', () => {
+test('/cr-band: full by default, route for the one-line band', () => {
   expect(DEFAULT_OPTIONS.band).toBe('full')
   expect(applyArgs('band route', DEFAULT_OPTIONS, 0).next).toMatchObject({ band: 'route' })
   expect(applyArgs('band full', { ...DEFAULT_OPTIONS, band: 'route' }, 0).next).toMatchObject({ band: 'full' })
@@ -67,7 +67,7 @@ test('/clauderouter band: full by default, route for the one-line band', () => {
   expect(normalize({}).band).toBe('full')
 })
 
-test('/clauderouter knows Fable and the model locks', () => {
+test('/cr: knows Fable and the model locks', () => {
   expect(DEFAULT_OPTIONS.locks).toEqual(['fable'])
   expect(applyArgs('pin fable', DEFAULT_OPTIONS, 0).next).toMatchObject({ pin: 'fable' })
   expect(applyArgs('lock opus', DEFAULT_OPTIONS, 0).next).toMatchObject({ locks: ['fable', 'opus'] })

@@ -70,7 +70,7 @@ test('a prompt prefix pins one turn', () => {
   expect(directiveOf('use @sonnet here')).toBe(null)
 })
 
-test('/clauderouter pin, cap, budget and ctx', () => {
+test('/cr-pin, cap, budget and ctx', () => {
   expect(applyArgs('pin sonnet med', DEFAULT_OPTIONS, 0).next).toMatchObject({ pin: 'sonnet', pinEffort: 'medium' })
   expect(applyArgs('pin auto', { ...DEFAULT_OPTIONS, pin: 'opus' }, 0).next).toMatchObject({ pin: null })
   expect(applyArgs('pin gpt', DEFAULT_OPTIONS, 0).next).toBe(null)

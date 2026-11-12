@@ -18,7 +18,7 @@ export type RouteInput = {
   tools: readonly string[]
   subagentType?: string
   current?: Model | null
-  // Where flagship creative work goes (/clauderouter creative); opus when unset
+  // Where flagship creative work goes (/cr-creative); opus when unset
   creative?: CreativeMode
   // The route the previous main-thread turn ended on. A short prompt with no signal of its own ("yes go ahead",
   // "oui vas-y", "continue") carries on with it instead of being scored as a light request.

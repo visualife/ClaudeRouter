@@ -31,7 +31,7 @@ export type Pin = { model: Model; effort: Effort | null }
 
 export type GuardInput = {
   pick: RoutePick
-  // The user's explicit choice (a turn directive or /clauderouter pin): wins over every limit
+  // The user's explicit choice (a turn directive or /cr-pin): wins over every limit
   pin: Pin | null
   maxEffort: Effort
   // USD one turn may spend before the guard downgrades it; 0 = off
