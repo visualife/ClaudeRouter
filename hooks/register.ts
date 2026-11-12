@@ -7,7 +7,7 @@ import { EFFORTS, type Pin, directiveOf, guard } from './guard'
 import { type Els, type Snapshot, drawBand, drawStrip } from './band'
 import { drawPane } from './pane'
 import { type Anim, animCells } from './pixel'
-import { carriesOn, creativeFloor, creativeOf, effortFor, familyOf, idFor, pickRoute, roleOf } from './route'
+import { carriesOn, creativeFloor, creativeOf, effortFor, familyOf, idFor, isPlanner, pickRoute, roleOf } from './route'
 import { attachAgent, addPlugin, bumpMcp, bumpSkill, nameOf, patchAgent, patchTask, toUsage } from './lists'
 
 const PANE = 'agent-ClaudeRouter'
@@ -238,7 +238,7 @@ export const register: Register = on => {
       budget: opts.budget,
       ctxCap: opts.ctxCap,
       isSub: Boolean(e.agentId),
-      isPlan: input.subagentType === 'Plan',
+      isPlan: isPlanner(input.subagentType),
       step: e.index,
       textLen: input.text.length,
       turnTools,
@@ -314,7 +314,7 @@ export const register: Register = on => {
     const opts = normalize(await read($, options))
     const pick = pickRoute({ text, tools: [], subagentType: e.subagentType, creative: opts.creative })
     // Subagents never start on Opus (or Fable) unless they plan: execution is Sonnet or Haiku
-    const spawnModel = (pick.model === 'opus' || pick.model === 'fable') && e.subagentType !== 'Plan' ? 'sonnet' : pick.model
+    const spawnModel = (pick.model === 'opus' || pick.model === 'fable') && !isPlanner(e.subagentType) ? 'sonnet' : pick.model
     // A locked session stays locked, subagents included: one that names no model inherits the parent's model
     // (until /clauderouter unlock). A parent id the router does not know is inherited too: it is never rewritten.
     const parentFamily = familyOf(e.parentModel)

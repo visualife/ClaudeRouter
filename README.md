@@ -32,6 +32,10 @@ Applied on every model request, after the router (or Jev) has picked. Defaults p
 
 The band's second line shows `guard ...` with the reason whenever a limit changed the pick, and is hidden otherwise. Budget uses the session cost the engine reports (API-equivalent USD).
 
+## Agent roster (v0.4.5)
+
+The plugin ships three subagents in `agents/`: `planner` (Opus, read-only, returns a plan), `implementer` (Sonnet) and `reviewer` (Sonnet, one pass with a checklist). A subagent type named `Plan`, `planner` or `architect` (also as `agent-ClaudeRouter:planner`) is the only kind that may run on Opus, at `xhigh`; every other subagent stays on Sonnet or Haiku. For test, lint and build runs, keep a Haiku `test-runner` agent of your own: the router already sends runner-named types to Haiku.
+
 ## Routing fixes (v0.4.4)
 
 - **A nudge carries on.** A prompt under 60 characters with no keyword ("yes go ahead", "oui vas-y", "continue") keeps the model and effort the previous turn ended on. It used to score as a short light request, so the turn that ran an approved plan started on Haiku at low effort.

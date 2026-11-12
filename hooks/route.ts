@@ -3,10 +3,13 @@ import type { Agent, Effort, Model } from '../types'
 // The mascot a subagent wears: Explore scouts, Plan plans, research reads, the rest build
 export function roleOf(subagentType: string, text: string): Agent['role'] {
   if (/explore/i.test(subagentType)) return 'scout'
-  if (/plan/i.test(subagentType)) return 'planner'
+  if (/plan|architect/i.test(subagentType)) return 'planner'
   if (/\b(research|investigat\w*|verify|trace|review|audit)\b/i.test(text)) return 'researcher'
   return 'builder'
 }
+
+// Built-in Plan, or a custom planner / architect agent (also as a plugin's "plugin:planner"): the only subagents that may use Opus
+export const isPlanner = (subagentType?: string) => !!subagentType && /(?:^|:)(?:plan|planner|architect)$/i.test(subagentType)
 
 // Local heuristics only: no model is called to decide. Counts keyword hits per tier,
 // prompt length, the subagent's type and the tools this turn has used.
@@ -185,7 +188,7 @@ export function pickRoute(input: RouteInput): RoutePick {
   if (input.subagentType === 'Explore') score.haiku += 2
   // A runner outweighs the "test" and "build" in its own brief, which would otherwise read as Sonnet work
   if (input.subagentType && RUNNER.test(input.subagentType)) score.haiku += 3
-  if (input.subagentType === 'Plan') score.opus += 2
+  if (isPlanner(input.subagentType)) score.opus += 2
   if (heavy === 0 && tools.length > 0 && tools.every(t => SEARCH.includes(t))) score.haiku += 1
   if (tools.some(t => EDITS.includes(t))) score.sonnet += 1
   if (tools.includes('Bash') && tools.filter(t => EDITS.includes(t)).length >= 3) score.opus += 1
@@ -204,7 +207,7 @@ export function pickRoute(input: RouteInput): RoutePick {
     // Sonnet runs at its stock level, medium. Low only when the prompt reads as a lookup and nothing else: an
     // unrecognised prompt (a French one, before 0.4.4) used to run at low.
     : model === 'sonnet' ? (light > 0 && mid === 0 && heavy === 0 ? 'low' : 'medium')
-    : DEEP.test(text) || input.subagentType === 'Plan' ? 'xhigh'
+    : DEEP.test(text) || isPlanner(input.subagentType) ? 'xhigh'
     : heavy >= 2 ? 'high'
     : 'medium'
   // Confidence from the margin over the runner-up, kept to 0.50–0.99
@@ -218,7 +221,7 @@ export function pickRoute(input: RouteInput): RoutePick {
 export function effortFor(model: Model, text: string, subagentType?: string): Effort {
   if (model === 'haiku') return 'low'
   if (model === 'sonnet') return 'medium'
-  return DEEP.test(text) || subagentType === 'Plan' ? 'xhigh' : 'high'
+  return DEEP.test(text) || isPlanner(subagentType) ? 'xhigh' : 'high'
 }
 
 // The signals behind a pick, as the band's dim second line: “excerpt” · kw:debug · len 212 · tools Bash·Edit

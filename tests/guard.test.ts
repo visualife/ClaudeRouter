@@ -80,3 +80,15 @@ test('/clauderouter pin, cap, budget and ctx', () => {
   expect(applyArgs('ctx 200k', DEFAULT_OPTIONS, 0).next?.ctxCap).toBe(200_000)
   expect(applyArgs('ctx lots', DEFAULT_OPTIONS, 0).next).toBe(null)
 })
+
+test('a custom planner or architect subagent may use Opus; others may not', async () => {
+  const { isPlanner } = await import('../hooks/route')
+  expect(isPlanner('Plan')).toBe(true)
+  expect(isPlanner('planner')).toBe(true)
+  expect(isPlanner('agent-ClaudeRouter:planner')).toBe(true)
+  expect(isPlanner('architect')).toBe(true)
+  expect(isPlanner('implementer')).toBe(false)
+  expect(isPlanner('planner-helper')).toBe(false)
+  expect(guard({ ...BASE, isSub: true, isPlan: true })).toMatchObject({ model: 'opus' })
+  expect(guard({ ...BASE, isSub: true, isPlan: false })).toMatchObject({ model: 'sonnet' })
+})
