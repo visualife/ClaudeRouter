@@ -25,11 +25,24 @@ Applied on every model request, after the router (or Jev) has picked. Defaults p
 | Subagents | not Opus | Only `Plan` subagents may use Opus; all others capped at medium. |
 | Turn budget | $3 per turn | Over it: Sonnet medium. Over 2×: Sonnet low. A toast tells you. `/clauderouter budget 5` or `off`. |
 | Context cap | 150k tokens | Over it: Sonnet medium. Over 1.5×: Sonnet low. `/clauderouter ctx 200k` or `off`. |
+| Haiku and big contexts | 100k tokens | Above it the main thread never moves to Haiku: a light request stays on Sonnet at low effort. Subagents are not concerned. |
 | Your choice wins | none | `/clauderouter pin sonnet medium` applies from the **next request, even mid-turn**. `pin auto` releases it. Or prefix one prompt: `@sonnet:med build the app` / `@opus:high ...`. |
 | Model locks | `fable` | A session on a locked model is left alone, subagents included. See **Model locks**. |
 | Creative work stays strong | on | Copywriting, art direction and brand work get their own tiers, by case (see **Creative work**). They keep their model for the whole turn: no plan/execute split, no long-prompt cap, and their own effort ceiling (`xhigh`). Over the budget or context cap the model drops to Sonnet, but the effort stays high. Creative subagents run on Sonnet at high effort. Your pin and locks still win. |
 
 The band's second line shows `guard ...` with the reason whenever a limit changed the pick, and is hidden otherwise. Budget uses the session cost the engine reports (API-equivalent USD).
+
+## Routing fixes (v0.4.4)
+
+- **A nudge carries on.** A prompt under 60 characters with no keyword ("yes go ahead", "oui vas-y", "continue") keeps the model and effort the previous turn ended on. It used to score as a short light request, so the turn that ran an approved plan started on Haiku at low effort.
+- **French prompts are scored.** The heavy / mid / light lists have French forms (`planifie`, `débogue`, `corrige`, `ajoute`, `mets à jour`, `liste`, `où`...). Before, a French code prompt matched nothing and ran on Sonnet at low effort.
+- **Sonnet runs at medium**, its stock effort. Low is kept for a prompt that reads as a lookup and nothing else.
+- **Everyday words count for half when alone**: `design`, `system`, `why`, `across`, `race`, `performance`, `optimize`. "update the design system tokens in the css file" stays on Sonnet; "debug why the token check fails" is still Opus.
+- **Runner subagents go to Haiku.** A subagent type with `runner`, `lint` / `linter` or `format` / `formatter` as a name part (`test-runner`) outweighs the "test" and "build" in its own brief.
+- **No Haiku above 100k tokens on the main thread.** Haiku 5.5 bills a prompt over 100k tokens at five times its base rates, and a model switch re-reads the whole context uncached. The band shows `guard haiku>100k`.
+- **Jev is asked once per turn** per thread (the main conversation, each subagent), not before every model request, and not at all about a prompt that only carries on. A failed call is not retried until the next turn.
+- The context-cap toast names the cheaper fix: `/compact`, or `/clear` between tasks.
+- "affiche les fichiers" (the French verb) is no longer read as a poster brief.
 
 ## Creative work (v0.4.3)
 
@@ -140,7 +153,7 @@ Set them from the prompt; they persist across reloads.
 | `/clauderouter creative cap <effort>` | Highest effort creative work may run at (default `xhigh`). |
 | `/clauderouter status` | Show the current options. |
 
-**Jev**: it only chooses the tier; Claude still does the work. Each routed request sends the prompt text (first 4000 characters) to `api.typesafe.ai` and costs one small Jev call (about 0.3 s). In the band, `jev` sits beside `haiku sonnet opus` on the Model route row: lit when Jev made the pick, dim when the rules did. Once Jev has been used, a `Jev · context` bar appears: the last call's input tokens against Jev's 64k per-request window, with the call count. A Jev pick shows `jev` on the band's second line (the line is otherwise hidden unless a guard limit applied). With no key, an error or a 2.5 s timeout, the rules decide, so nothing blocks.
+**Jev**: it only chooses the tier; Claude still does the work. Each turn sends the prompt text (first 4000 characters) to `api.typesafe.ai` once per thread, the main conversation and each subagent, and costs one small Jev call (about 0.3 s); the following requests of the turn reuse the answer. In the band, `jev` sits beside `haiku sonnet opus` on the Model route row: lit when Jev made the pick, dim when the rules did. Once Jev has been used, a `Jev · context` bar appears: the last call's input tokens against Jev's 64k per-request window, with the call count. A Jev pick shows `jev` on the band's second line (the line is otherwise hidden unless a guard limit applied). With no key, an error or a 2.5 s timeout, the rules decide, so nothing blocks.
 
 **Keep warm**: each ping is a short model call on the existing conversation (cache reads, cheap). It only runs while the window is open and no turn is running, and it ends the window if a ping fails, since the cache is then probably gone. Switching model tiers loses the cache of the previous tier, which is what this is for. If you already run the `cache-tax` mod's `/keepwarm`, use one of the two, not both.
 
@@ -157,7 +170,7 @@ git -C ClaudeRouter pull
 
 ## Tuning
 
-Routing lives in `hooks/route.ts`: edit the `HEAVY`, `MID` and `LIGHT` keyword lists, or `HYSTERESIS`, to change how eagerly it moves between tiers.
+Routing lives in `hooks/route.ts`: edit the `HEAVY`, `HEAVY_WEAK`, `MID` and `LIGHT` keyword lists (and their `_FR` twins), or `HYSTERESIS`, to change how eagerly it moves between tiers.
 
 ## Layout
 

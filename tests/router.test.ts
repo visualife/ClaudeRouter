@@ -3,7 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { askJev } from '../hooks/jev'
 import { applyArgs, DEFAULT_OPTIONS } from '../hooks/options'
-import { pickRoute, roleOf } from '../hooks/route'
+import { carriesOn, pickRoute, roleOf } from '../hooks/route'
 
 const PLUGIN = 'agent-ClaudeRouter'
 const SCROLL = { offset: 0, bodyRows: 20 }
@@ -172,9 +172,10 @@ test('while a turn runs the terminal repaints its shimmering bars with $.ui.blit
 })
 
 test('hysteresis keeps the current model on a tie, but not on a clear win', () => {
-  // "why list": haiku and opus tie, so sonnet by default — unless a tied model is already running
-  expect(pickRoute({ text: 'why list', tools: [] }).model).toBe('sonnet')
-  expect(pickRoute({ text: 'why list', tools: [], current: 'opus' }).model).toBe('opus')
+  // "debug list": haiku and opus tie, so sonnet by default — unless a tied model is already running.
+  // (Until 0.4.4 the probe was "why list"; "why" alone now counts for half, so it no longer ties.)
+  expect(pickRoute({ text: 'debug list', tools: [] }).model).toBe('sonnet')
+  expect(pickRoute({ text: 'debug list', tools: [], current: 'opus' }).model).toBe('opus')
   // a clear sonnet win does not hold the old model
   expect(pickRoute({ text: 'fix the login bug in the form', tools: [], current: 'opus' }).model).toBe('sonnet')
 })
@@ -336,4 +337,94 @@ test('the Fable bar shows the share of the session tokens that ran on Fable', as
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: PLUGIN, props: PANE })
   expect(await pane.find({ type: 'Text', text: /3k \/ 4k · 75% of session/ })).toBeTruthy()
   await pane.unmount()
+})
+
+// 0.4.4
+
+const STEP_DONE = (e: { turnId: string; index: number }) => ({ turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage: null })
+
+test('a short prompt with no signal carries on with the route the last turn ended on', () => {
+  const prev = { model: 'sonnet' as const, effort: 'medium' as const }
+  for (const text of ['yes go ahead', 'oui vas-y', 'continue', 'ok']) {
+    expect(pickRoute({ text, tools: [], current: 'sonnet', prev })).toMatchObject({ model: 'sonnet', effort: 'medium' })
+  }
+  expect(pickRoute({ text: 'yes go ahead', tools: [], prev: { model: 'opus', effort: 'high' } })).toMatchObject({ model: 'opus', effort: 'high' })
+  // no previous turn: the old rule, a short light request
+  expect(pickRoute({ text: 'yes go ahead', tools: [] }).model).toBe('haiku')
+  // a prompt with a signal of its own is scored, whatever came before
+  expect(pickRoute({ text: 'list the files', tools: [], prev }).model).toBe('haiku')
+  expect(pickRoute({ text: 'write a tagline', tools: [], prev }).model).toBe('opus')
+  // Fable is never carried, and a subagent has no previous turn
+  expect(pickRoute({ text: 'yes go ahead', tools: [], prev: { model: 'fable', effort: 'high' } }).model).toBe('haiku')
+  expect(carriesOn({ text: 'continue', tools: [], subagentType: 'general-purpose', prev })).toBe(false)
+})
+
+test('French prompts are scored like English ones', () => {
+  expect(pickRoute({ text: 'corrige le bug du formulaire de contact et ajoute un test', tools: [] })).toMatchObject({ model: 'sonnet', effort: 'medium' })
+  expect(pickRoute({ text: 'pourquoi le build échoue sur Vercel ? regarde les logs et corrige', tools: [] })).toMatchObject({ model: 'sonnet', effort: 'medium' })
+  expect(pickRoute({ text: 'planifie la migration du catalogue vers n8n cloud', tools: [] })).toMatchObject({ model: 'opus', effort: 'xhigh' })
+  expect(pickRoute({ text: 'liste les fichiers du dossier hooks', tools: [] })).toMatchObject({ model: 'haiku', effort: 'low' })
+  // "ou" is "or", not "où"; "resume" and "listener" are English
+  expect(pickRoute({ text: 'ajoute un champ email ou téléphone', tools: [] }).model).toBe('sonnet')
+  expect(pickRoute({ text: 'resume the work on the event listener and add the handler', tools: [] }).model).toBe('sonnet')
+})
+
+test('everyday words alone do not send a prompt to Opus, and Sonnet runs at medium', () => {
+  expect(pickRoute({ text: 'update the design system tokens in the css file', tools: [] })).toMatchObject({ model: 'sonnet', effort: 'medium' })
+  expect(pickRoute({ text: 'design the database schema', tools: [] })).toMatchObject({ model: 'sonnet', effort: 'medium' })
+  // beside a strong signal they count in full
+  expect(pickRoute({ text: 'debug why the refresh token check fails', tools: ['Bash', 'Edit'] }).model).toBe('opus')
+  // a prompt with no keyword at all is not a lookup: medium, not low
+  expect(pickRoute({ text: 'the checkout button does nothing when the cart holds a subscription item', tools: [] })).toMatchObject({ model: 'sonnet', effort: 'medium' })
+})
+
+test('a runner subagent goes to Haiku whatever its brief says', () => {
+  const brief = 'Run tests Run the test suite, the type check and the build, then report the failures'
+  expect(pickRoute({ text: brief, tools: [], subagentType: 'test-runner' })).toMatchObject({ model: 'haiku', effort: 'low' })
+  expect(pickRoute({ text: brief, tools: [], subagentType: 'general-purpose' }).model).toBe('sonnet')
+  // whole name parts only
+  expect(pickRoute({ text: 'write the summary of the docs', tools: [], subagentType: 'information-gatherer' }).model).toBe('sonnet')
+})
+
+test('"yes go ahead" is sent on the model and effort the last turn ended on', async ($, on) => {
+  world(on)
+  const sent: string[] = []
+  on('turn.step', async function* (_$, e) {
+    sent.push(`${e.model}/${e.effort}`)
+    return STEP_DONE(e)
+  })
+  await $.turn.start({ turnId: 't1', text: 'fix the failing test in router.test.ts' })
+  for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-sonnet-5-5', effort: 'low', messageCount: 1 })) { /* drain */ }
+  await $.turn.complete({ turnId: 't1', reason: 'answer', isAborted: false, durationMs: 100, answer: '' })
+  await $.turn.start({ turnId: 't2', text: 'yes go ahead' })
+  for await (const _ of $.turn.step({ turnId: 't2', index: 0, model: 'claude-sonnet-5-5', effort: 'medium', messageCount: 3 })) { /* drain */ }
+  expect(sent).toEqual(['claude-sonnet-5-5/medium', 'claude-sonnet-5-5/medium'])
+})
+
+test('Jev is asked once per turn, not before every request, and not about a prompt that only carries on', async ($, on) => {
+  world(on)
+  let calls = 0
+  on('env.get', () => ({ value: 'key' }))
+  on('http.fetch', () => {
+    calls += 1
+    return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ answers: { route: { choice: 'sonnet', probabilities: { sonnet: 0.9 } } }, usage: { input_tokens: 900, output_tokens: 100 } }) } }
+  })
+  on('turn.step', async function* (_$, e) {
+    return STEP_DONE(e)
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'clauderouter', args: 'engine jev', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  await $.turn.start({ turnId: 't1', text: 'fix the login bug' })
+  for (const index of [0, 1, 2]) {
+    for await (const _ of $.turn.step({ turnId: 't1', index, model: 'claude-sonnet-5-5', effort: 'medium', messageCount: 1 + index })) { /* drain */ }
+  }
+  expect(calls).toBe(1)
+  await $.turn.complete({ turnId: 't1', reason: 'answer', isAborted: false, durationMs: 100, answer: '' })
+  await $.turn.start({ turnId: 't2', text: 'write the tests' })
+  for await (const _ of $.turn.step({ turnId: 't2', index: 0, model: 'claude-sonnet-5-5', effort: 'medium', messageCount: 5 })) { /* drain */ }
+  expect(calls).toBe(2)
+  await $.turn.complete({ turnId: 't2', reason: 'answer', isAborted: false, durationMs: 100, answer: '' })
+  await $.turn.start({ turnId: 't3', text: 'continue' })
+  for await (const _ of $.turn.step({ turnId: 't3', index: 0, model: 'claude-sonnet-5-5', effort: 'medium', messageCount: 7 })) { /* drain */ }
+  expect(calls).toBe(2)
 })

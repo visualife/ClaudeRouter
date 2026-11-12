@@ -38,7 +38,12 @@ test('creative work is recognised in English and French, and "copy the file" is 
     'translate this function to Python',
     'design the database schema',
     'corrige le positionnement du header en CSS',
+    'affiche les fichiers du dossier',
+    'affiche-moi les logs du build',
   ]) expect(creativeOf(text)).toBe(null)
+  // the noun still is creative work
+  expect(creativeOf('une affiche pour le salon du thé')).toBe('craft')
+  expect(creativeOf('des affiches et des flyers pour le lancement')).toBe('craft')
 })
 
 test('each creative case is told apart: flagship, craft, bulk', () => {

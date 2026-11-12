@@ -17,6 +17,9 @@ export type RouteInput = {
   current?: Model | null
   // Where flagship creative work goes (/clauderouter creative); opus when unset
   creative?: CreativeMode
+  // The route the previous main-thread turn ended on. A short prompt with no signal of its own ("yes go ahead",
+  // "oui vas-y", "continue") carries on with it instead of being scored as a light request.
+  prev?: { model: Model; effort: Effort } | null
 }
 
 // ponytail: fixed constant; move to $.state config if tuning is wanted
@@ -24,10 +27,30 @@ export const HYSTERESIS = 0.08
 
 export type RoutePick = { model: Model; effort: Effort; conf: number }
 
-const HEAVY = /\b(plan|architect\w*|design|debug\w*|trace|root cause|refactor\w*|migrat\w*|security|race|deadlock|trade-?offs?|investigat\w*|why|performance|optimi[sz]e\w*|across|system)\b/gi
+// Strong signals of hard work: each one counts
+const HEAVY = /\b(plan|architect\w*|debug\w*|trace|root cause|refactor\w*|migrat\w*|security|deadlock|trade-?offs?|investigat\w*)\b/gi
+// Everyday words that only hint at it ("the design system", "file system", "why not"). Alone they count for half,
+// so "update the design system tokens" stays on Sonnet; beside a strong signal ("debug why ...") they count in full.
+const HEAVY_WEAK = /\b(design|race|why|performance|optimi[sz]e\w*|across|system)\b/gi
 const MID = /\b(write|implement\w*|fix\w*|test\w*|fixtures?|review\w*|add|update|build)\b/gi
 const LIGHT = /\b(list|read|show|rename|print|count|find|grep|format|typo|log|open|which|where|summari[sz]e)\b/gi
-const DEEP = /\b(plan|architect\w*)\b/i
+const DEEP = /\b(plan|planifi\w*|architect\w*)\b/i
+// The same tiers in French. \b stops at an accented letter, so these use the letter-aware boundaries of W below.
+// Words the English lists already catch (architecture, migration, refactorise, optimise, teste) are not repeated.
+const G = (body: string) => new RegExp(`(?<![\\p{L}\\p{N}_])(?:${body})(?![\\p{L}\\p{N}_])`, 'giu')
+const HEAVY_FR = G(['planifi\\p{L}*', 'd[ée]bogu?\\p{L}*', 'débug\\p{L}*', 'cause racine', 'refonte', 'migr(?:e|es|er|ez|ons)', 's[ée]curit[ée]', 'diagnostiqu\\p{L}*'].join('|'))
+const HEAVY_WEAK_FR = G(['pourquoi', 'conception', 'concevoir', 'syst[èe]mes?', 'performances', 'optimisation\\p{L}*'].join('|'))
+const MID_FR = G([
+  '[ée]cri(?:s|re|vez|t)', 'implément\\p{L}*', 'corrig\\p{L}*', 'r[ée]par(?:e|er|es|ez|ons)', 'ajout\\p{L}*', 'met(?:s|tre|tez)? [àa] jour', 'mise [àa] jour',
+  'construi\\p{L}*', 'cr[ée](?:e|er|es|ez|ons)', 'modifi\\p{L}*', 'int[èe]gr(?:e|er|es|ez|ons|ation)', 'd[ée]velopp\\p{L}*',
+].join('|'))
+// Kept to forms English does not share: "ou" (or), "resume", "listen" and "Montreal" must not count as lookups
+const LIGHT_FR = G(['liste[srz]?', 'lis', 'lire', 'montre[srz]?', 'renomm\\p{L}*', 'trouve\\p{L}*', 'cherche\\p{L}*', 'formate\\p{L}*', 'ouvre\\p{L}*', 'où', 'résum\\p{L}*', 'resum(?:er|ez)'].join('|'))
+// Subagent types that only run something and report: test-runner, linter, formatter. Whole name parts only, so
+// "information-gatherer" is not a formatter.
+const RUNNER = /(?:^|[-_:\s])(?:runner|lint(?:er)?|format(?:ter)?)(?:$|[-_:\s])/i
+// A prompt shorter than this with no keyword is a nudge ("yes", "continue"), not a task
+export const SHORT = 60
 
 // Creative work, in English and French. Judgement, taste and voice matter more than speed here, so it gets a strong
 // model at a high effort, scaled to the case:
@@ -59,7 +82,9 @@ const CRAFT = W([
   'email sequences?', 'cold emails?', 'captions?', 'tone of voice', 'blog posts?', 'press releases?', 'call to action',
   'accroches?', 'fiches? produits?', 'r[ée]daction', 'r[ée]dige\\w*', 'page d.accueil', 'ton de voix', 'texte (?:de|pour) (?:la|le|les|une?|notre|ma|mon)',
   'storytelling', 'about page', 'page [àa] propos', '(?:instagram|linkedin|facebook|tiktok|social) (?:posts?|captions?|carousels?|reels?|bios?)',
-  'ad creatives?', 'banni[èe]res?', 'affiches?', 'posters?', 'flyers?', 'brochures?', 'image prompts?', 'prompts? (?:image|midjourney|magnific|flux)',
+  'ad creatives?', 'banni[èe]res?',
+  // "affiche" is also the verb (display): "affiche les fichiers", "affiche-moi les logs" are not poster briefs
+  'affiches?(?!-| (?:le|la|les|l[’\']|moi|nous|tout|tous|toutes|ce|ces|cette|un|une|des|du)(?![\\p{L}]))', 'posters?', 'flyers?', 'brochures?', 'image prompts?', 'prompts? (?:image|midjourney|magnific|flux)',
   'midjourney', 'photo (?:direction|briefs?|shoots?)', 'direction photo', 'shootings?', 'product photography', 'photographie produit', 'lighting setups?',
 ].join('|'))
 // Volume or adaptation. Turns craft into bulk; turns flagship into craft (a translated manifesto still needs care).
@@ -126,17 +151,40 @@ export function idFor(family: Model, running: string): string {
   return swap ? running.replace(/haiku|sonnet|opus/, family) : MODEL_IDS[family]
 }
 
-const hits = (text: string, re: RegExp, cap: number) => Math.min(cap, (text.match(re) ?? []).length)
+const count = (text: string, ...res: RegExp[]) => res.reduce((n, re) => n + (text.match(re) ?? []).length, 0)
+
+// The keyword signals of a prompt, English and French together, each capped
+function signalsOf(text: string) {
+  const strong = count(text, HEAVY, HEAVY_FR)
+  const weak = count(text, HEAVY_WEAK, HEAVY_WEAK_FR)
+  return {
+    heavy: Math.min(3, strong + (strong > 0 ? weak : weak / 2)),
+    mid: Math.min(2, count(text, MID, MID_FR)),
+    light: Math.min(2, count(text, LIGHT, LIGHT_FR)),
+  }
+}
+
+// True when a main-thread prompt says nothing about the work ("yes go ahead", "oui vas-y", "continue") and a
+// previous turn exists to carry on from. It used to score as a short light request: Haiku at low effort, for the
+// turn that runs the plan just approved. Fable is never carried: the router does not pick it by itself.
+export function carriesOn(input: RouteInput): boolean {
+  if (!input.prev || !isAuto(input.prev.model) || input.subagentType || input.text.length >= SHORT) return false
+  const s = signalsOf(input.text)
+  return s.heavy + s.mid + s.light === 0 && creativeOf(input.text) === null
+}
 
 // Scores each tier and picks the highest; a tie, or no signal at all, stays on sonnet
 export function pickRoute(input: RouteInput): RoutePick {
   const { text, tools } = input
-  const heavy = hits(text, HEAVY, 3)
-  const score = { haiku: hits(text, LIGHT, 2), sonnet: 0.5 + hits(text, MID, 2), opus: heavy }
+  if (carriesOn(input) && input.prev) return { model: input.prev.model, effort: input.prev.effort, conf: 0.6 }
+  const { heavy, mid, light } = signalsOf(text)
+  const score = { haiku: light, sonnet: 0.5 + mid, opus: heavy }
 
   if (text.length > 400) score.opus += 1
-  else if (text.length < 60 && heavy === 0) score.haiku += 1
+  else if (text.length < SHORT && heavy === 0) score.haiku += 1
   if (input.subagentType === 'Explore') score.haiku += 2
+  // A runner outweighs the "test" and "build" in its own brief, which would otherwise read as Sonnet work
+  if (input.subagentType && RUNNER.test(input.subagentType)) score.haiku += 3
   if (input.subagentType === 'Plan') score.opus += 2
   if (heavy === 0 && tools.length > 0 && tools.every(t => SEARCH.includes(t))) score.haiku += 1
   if (tools.some(t => EDITS.includes(t))) score.sonnet += 1
@@ -153,7 +201,9 @@ export function pickRoute(input: RouteInput): RoutePick {
   if (cur && cur !== model && share(model) - share(cur) <= HYSTERESIS) model = cur
   const effort: Effort =
     model === 'haiku' ? 'low'
-    : model === 'sonnet' ? (score.sonnet >= 2 ? 'medium' : 'low')
+    // Sonnet runs at its stock level, medium. Low only when the prompt reads as a lookup and nothing else: an
+    // unrecognised prompt (a French one, before 0.4.4) used to run at low.
+    : model === 'sonnet' ? (light > 0 && mid === 0 && heavy === 0 ? 'low' : 'medium')
     : DEEP.test(text) || input.subagentType === 'Plan' ? 'xhigh'
     : heavy >= 2 ? 'high'
     : 'medium'
@@ -174,7 +224,7 @@ export function effortFor(model: Model, text: string, subagentType?: string): Ef
 // The signals behind a pick, as the band's dim second line: “excerpt” · kw:debug · len 212 · tools Bash·Edit
 export function whyOf(input: RouteInput): string {
   const kind = creativeOf(input.text)
-  const kw = kind ? { flagship: 'creative', craft: 'copy', bulk: 'copy·bulk' }[kind] : (input.text.match(HEAVY) ?? input.text.match(MID) ?? input.text.match(LIGHT) ?? [])[0]?.toLowerCase()
+  const kw = kind ? { flagship: 'creative', craft: 'copy', bulk: 'copy·bulk' }[kind] : (input.text.match(HEAVY) ?? input.text.match(HEAVY_WEAK) ?? input.text.match(MID) ?? input.text.match(LIGHT) ?? [])[0]?.toLowerCase()
   const excerpt = input.text.replace(/\s+/g, ' ').trim().slice(0, 40)
   const tools = [...new Set(input.tools)].slice(-3)
   return [

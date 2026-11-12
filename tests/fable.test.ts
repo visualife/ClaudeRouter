@@ -41,7 +41,8 @@ test('idFor keeps a Fable id and never invents one', () => {
 })
 
 test('a running Fable model does not break routing, and Fable is never picked by itself', () => {
-  const pick = pickRoute({ text: 'why list', tools: [], current: 'fable' })
+  // "debug list": haiku and opus tie, so sonnet (the probe was "why list" until "why" alone counted for half)
+  const pick = pickRoute({ text: 'debug list', tools: [], current: 'fable' })
   expect(pick.model).toBe('sonnet')
   const heavy = pickRoute({ text: 'plan the architecture and debug the token check across modules', tools: [], current: 'fable' })
   expect(heavy.model).toBe('opus')

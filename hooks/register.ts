@@ -1,13 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { Agent, Effort, Model, Route, Task } from '../types'
-import { JEV_TIMEOUT_MS, askJev } from './jev'
+import { JEV_TIMEOUT_MS, type JevPick, askJev } from './jev'
 import { DEFAULT_OPTIONS, WARM_EVERY_MS, applyArgs, normalize } from './options'
 import { EFFORTS, type Pin, directiveOf, guard } from './guard'
 import { type Els, type Snapshot, drawBand, drawStrip } from './band'
 import { drawPane } from './pane'
 import { type Anim, animCells } from './pixel'
-import { creativeFloor, creativeOf, effortFor, familyOf, idFor, pickRoute, roleOf } from './route'
+import { carriesOn, creativeFloor, creativeOf, effortFor, familyOf, idFor, pickRoute, roleOf } from './route'
 import { attachAgent, addPlugin, bumpMcp, bumpSkill, nameOf, patchAgent, patchTask, toUsage } from './lists'
 
 const PANE = 'agent-ClaudeRouter'
@@ -41,6 +41,13 @@ let warned = false
 let routedLocked: string | null = null
 // When the main thread last sent a request, for keep-warm
 let lastRequestAt: number | null = null
+// The route the main thread last ran on, and the one the previous turn ended on. A short prompt with no signal of
+// its own ("yes go ahead") carries on with the latter. Null after a locked (passed-through) request.
+let lastMain: { model: Model; effort: Effort } | null = null
+let prevRoute: { model: Model; effort: Effort } | null = null
+// Jev's answer for this turn, per thread ('main' or a subagent id). The prompt does not change between the requests
+// of a turn, so Jev is asked once, not before every request. null = it failed: the rules decide for the rest of the turn.
+const jevMemo = new Map<string, JevPick | null>()
 // explicit: the Agent call named a model. Its requests are then passed through untouched.
 const subagents = new Map<string, { text: string; subagentType?: string; explicit: boolean }>()
 // The Rasters each drawn site mounted that shimmer or move: what the timer repaints with $.ui.blit
@@ -138,6 +145,8 @@ export const register: Register = on => {
     turnTools = []
     turnPin = directiveOf(e.text)
     warned = false
+    prevRoute = lastMain
+    jevMemo.clear()
     turnCostStart = (await read($, usage))?.cost ?? 0
     const task: Task = {
       id: e.turnId,
@@ -166,6 +175,7 @@ export const register: Register = on => {
       subagentType: sub?.subagentType,
       current: familyOf(e.model),
       creative: opts.creative,
+      prev: e.agentId ? null : prevRoute,
     }
     let pick = pickRoute(input)
     let by: Route['by'] = 'rules'
@@ -194,18 +204,26 @@ export const register: Register = on => {
         await update($, tasks, list => patchAgent(list, agentId, { model: shown, effort: eff }))
       } else {
         const lockedTurn = e.turnId
+        lastMain = null
         await update($, tasks, list => patchTask(list, lockedTurn, { steps: e.index + 1, model: shown, effort: eff }))
       }
       return passed
     }
-    if (opts.engine === 'jev') {
-      const key = await $.env.get('TYPESAFE_API_KEY')
-      const timeout = new Promise<null>(resolve => { $.clock.after(JEV_TIMEOUT_MS, () => resolve(null)) })
-      const asked = key ? await Promise.race([askJev((url, init) => $.http.fetch(url, init), key, input), timeout]) : null
+    // A prompt that only carries on ("yes go ahead") keeps the previous route: Jev is not asked about it
+    if (opts.engine === 'jev' && !carriesOn(input)) {
+      const memoKey = e.agentId ?? 'main'
+      let asked = jevMemo.get(memoKey) ?? null
+      if (!jevMemo.has(memoKey)) {
+        const key = await $.env.get('TYPESAFE_API_KEY')
+        const timeout = new Promise<null>(resolve => { $.clock.after(JEV_TIMEOUT_MS, () => resolve(null)) })
+        asked = key ? await Promise.race([askJev((url, init) => $.http.fetch(url, init), key, input), timeout]) : null
+        jevMemo.set(memoKey, asked)
+        const called = asked
+        if (called) await update($, jev, u => ({ calls: (u?.calls ?? 0) + 1, input: called.input, output: called.output }))
+      }
       if (asked) {
         pick = { model: asked.model, conf: asked.conf, effort: effortFor(asked.model, input.text, input.subagentType) }
         by = 'jev'
-        await update($, jev, u => ({ calls: (u?.calls ?? 0) + 1, input: asked.input, output: asked.output }))
       }
     }
     // Creative work is set to its case's tier whoever chose (pickRoute already did it for the rules)
@@ -231,12 +249,17 @@ export const register: Register = on => {
     })
     if (!warned && guarded.limits.some(l => l.startsWith('turn $') || l.startsWith('ctx '))) {
       warned = true
-      $.ui.toast(`ClaudeRouter: ${guarded.limits.join(', ')}. Downgraded to ${guarded.model}/${guarded.effort}.`)
+      // Over the context cap the model swap halves the rate; /compact or /clear cuts the tokens every request re-reads
+      const tip = guarded.limits.some(l => l.startsWith('ctx ')) ? ' /compact (or /clear between tasks) shrinks every request.' : ''
+      $.ui.toast(`ClaudeRouter: ${guarded.limits.join(', ')}. Downgraded to ${guarded.model}/${guarded.effort}.${tip}`)
     }
     pick = { ...pick, model: guarded.model, effort: guarded.effort }
     const kept = familyOf(e.model) === pick.model
     const sentId = idFor(pick.model, e.model)
-    if (!e.agentId) routedLocked = opts.locks.includes(pick.model) ? sentId : null
+    if (!e.agentId) {
+      routedLocked = opts.locks.includes(pick.model) ? sentId : null
+      lastMain = { model: pick.model, effort: pick.effort }
+    }
     const result = yield* next({ ...e, model: sentId, effort: pick.effort })
 
     const decided: Route = {

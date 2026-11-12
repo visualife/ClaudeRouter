@@ -21,6 +21,10 @@ export const OPUS_STEPS = 2
 export const LONG_PROMPT = 1200
 // This many tool calls in one turn = it is executing, not planning
 export const EXEC_TOOLS = 6
+// Haiku 5.5 bills a prompt above 100k tokens at five times its base rates (platform.claude.com pricing, checked
+// 2026-11-12), and moving the main thread to it re-reads the whole context uncached. Past this size a light request
+// stays on Sonnet, whose cache is usually warm.
+export const HAIKU_CTX = 100_000
 const WRITES = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']
 
 export type Pin = { model: Model; effort: Effort | null }
@@ -91,6 +95,12 @@ export function guard(i: GuardInput): Guarded {
 
   // A subagent is never above medium (high for creative work) unless it plans
   if (i.isSub && !i.isPlan) effort = capEffort(effort, floor)
+
+  // Main thread only: a subagent has a small context of its own, and contextTokens is the session's
+  if (model === 'haiku' && !i.isSub && i.contextTokens !== null && i.contextTokens > HAIKU_CTX) {
+    model = 'sonnet'
+    limits.push('haiku>100k')
+  }
 
   if (i.ctxCap > 0 && i.contextTokens !== null && i.contextTokens > i.ctxCap) {
     model = capModel(model, 'sonnet')

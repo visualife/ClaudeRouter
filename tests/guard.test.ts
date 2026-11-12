@@ -43,6 +43,15 @@ test('a big context downgrades, a huge one goes to low', () => {
   expect(guard({ ...BASE, contextTokens: 255_000, ctxCap: 0 }).model).toBe('opus')
 })
 
+test('past 100k tokens the main thread does not move to Haiku', () => {
+  const light: GuardInput = { ...BASE, pick: { model: 'haiku', effort: 'low', conf: 0.9 } }
+  expect(guard({ ...light, contextTokens: 80_000 })).toMatchObject({ model: 'haiku', effort: 'low' })
+  expect(guard({ ...light, contextTokens: 120_000 })).toMatchObject({ model: 'sonnet', effort: 'low', limits: ['haiku>100k'] })
+  // a subagent has a small context of its own, and an unknown size changes nothing
+  expect(guard({ ...light, isSub: true, contextTokens: 120_000 }).model).toBe('haiku')
+  expect(guard({ ...light, contextTokens: null }).model).toBe('haiku')
+})
+
 test('the turn budget downgrades, and twice the budget goes to low', () => {
   expect(guard({ ...BASE, turnCost: 3.5 })).toMatchObject({ model: 'sonnet', effort: 'medium' })
   expect(guard({ ...BASE, turnCost: 6.5 })).toMatchObject({ model: 'sonnet', effort: 'low' })
