@@ -10,8 +10,32 @@ A Claude Code mod that picks the **model and effort for each request**, and keep
 - **Live band above the prompt**: current route, running agents, skills used, MCP calls, plugins seen, context window, and 5h / 7d plan usage.
 - **`/cr` pane**: cost, tokens and elapsed time cards, plus the running and finished subagents with the model and effort each one got.
 - **Jev as the router (optional)**: let [Jev](https://typesafe.ai) (TypeSafe System One) pick the tier instead of the keyword rules. Falls back to the rules on any error or timeout.
-- **Keep the cache warm (optional)**: pings the prompt cache every 50 minutes while you are idle, so a break does not cost a full re-write.
+- **Keep the cache warm (optional)**: pings the prompt cache every 50 minutes while you are idle (windows up to 8 hours: `/cr-warm 8h`, short `/cr-kw`), so a break does not cost a full re-write.
 - **Pixel mascots** per subagent role: scout (Explore), planner (Plan), researcher, builder.
+
+## Orchestrator mode (v0.5.0)
+
+For a session where one strong model (Fable, say) splits the work and hands each part to a sub-agent with its own model and effort. Off by default: with `/cr-orchestrator off` the main model is routed exactly as before.
+
+**Who chooses a sub-agent's model and effort.** The router chooses only what nobody else did. In order: an environment override, the Agent call's own `model` / `effort` (the orchestrator), the agent file's `model` / `effort` frontmatter, then the router. A choice made upstream is passed through unchanged, on the spawn and on every request after it. Each part is decided separately: a file that sets the model and no effort gets the router's effort for that model (held to medium unless the agent plans). An agent whose file the router cannot read, and a fork, are left to the engine rather than routed over a choice it cannot see. The router finds agent files in `.claude/agents/` (the project and its parents), `~/.claude/agents/` and a plugin's `agents/`.
+
+**`/cr-orchestrator on` (short: `/cr-orch on`).** The session's own model is left as chosen and is never rerouted (a pin or an `@model` prefix, which you typed, still applies). A sub-agent that nothing sets is routed by the usual rules instead of inheriting a locked parent's model.
+
+**The deck.** In the `/cr` pane every sub-agent row shows its type and task, model, effort, who set them (`frontmatter`, `orchestrator`, `router`, `env`, or `default` for a part the router left to the engine) and its tokens: prompt tokens billed fresh (input plus cache writes), prompt tokens the cache served, and tokens written. The band's agent lines show model, effort and who set them.
+
+**Environment overrides.** `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` (with `CLAUDE_CODE_SUBAGENT_MODEL`) and `CLAUDE_CODE_EFFORT_LEVEL` override every choice above, the orchestrator's included. If either is set, a warning is toasted at session start and stays in the pane and the band.
+
+**Cost.** Fill in `prices.json` (shipped empty: USD per million tokens per model, input, output, cache write, cache read) or a copy at `~/.claude/clauderouter-prices.json`, which overrides it field by field. The pane shows a cost per row and a "Deck cost" card, `/cr-deck` prints them as text, and `/cr-prices` reloads the table. With a price missing the deck says "prices missing"; nothing is ever estimated.
+
+Per-invocation `effort` on an Agent call needs Claude Code v2.1.292 or later.
+
+## Manager mode and the session log (v0.5)
+
+`/cr-orchestrator on` makes the session a manager: `~/.claude/orchestrator.md` is loaded into the main session (when turned on and after a compaction, never into a sub-agent; a missing file is reported, not confirmed), and the main thread's Read, Glob, Grep, Write, Edit, NotebookEdit and Bash calls are refused except on `MAP.md`, `HANDOFF.md`, `CLAUDE.md`, `plans/`, `~/.claude/orchestrator.md`, `routing/` and `agents/` (reads) and `HANDOFF.md`, `MAP.md`, `old-handoff/`, `plans/` (writes). A refused call is answered with the agent to hand the work to: Read, Glob and Grep point to `scout`, Write, Edit, MultiEdit and NotebookEdit to `coder`, Bash to `test-runner`; the message also lists `architect` (design or contract), `art-copy` (design and copy) and `verifier` (judging). Sub-agents are never guarded. `/cr-orchestrator off` lifts the block at once; `/cr-orchestrator hands on` lifts it for an emergency, keeps the rules, and shows amber. `/cr-status` shows the mode and whether the rules are loaded. The deck counts guard blocks and sets the main thread's tokens and cost against the sub-agents'. The mode is per session: it is not remembered for the next one. The router never changes the session's own model: to have a Fable manager, start the session on Fable.
+
+**Roster the guard and rules expect** in `~/.claude/agents/` (your files, not shipped here): `scout` (reads), `coder` (changes), `architect` (design, contracts), `art-copy` (design and copy), `test-runner` (test, lint and build runs), `verifier` and `integrator`. `verifier` runs on Sonnet at high effort, 20 turns, edits nothing, and ends its report with PASS / FAIL / NOT CHECKED lines. `integrator` runs on Sonnet at medium effort and does the MCP work on Supabase, n8n, Vercel, Stripe and Shopify; it reads and inspects by default and changes a system only when the brief says so.
+
+**Session log.** The hooks (no model) write `~/.claude/cr-logs/<project>/<date>-<hhmm>-<session>.jsonl`, one line per event (task, agent launch, skill, MCP, agent end, guard block, follow-up, verifier verdict, main turn, session start and end), and a readable `.md` of the same name at session end. Lines are built from named fields only: a prompt is cut to 120 characters, and no file content, tool payload, brief body or environment value is written. `/cr-log` shows the current session as a table, `/cr-log last` the previous one. A verifier's verdict is counted from its hand-back report: any FAIL line fails it, all PASS lines pass it, anything else is not checked. The skills of an agent are read from the `Skills:` line of its brief. `/cr-review [n]` (default 10) has one Sonnet agent at medium effort, with Read and Grep only, read the last n logs of the project and answer with per-agent figures and at most five proposed edits; its answer is written to `reviews/<date>.md` and nothing is changed. The agent's paths are limited by its brief, not enforced: a plugin's own sub-agent steps past the plugin's tool hook.
 
 ## Cost guards (v0.4)
 
@@ -80,7 +104,9 @@ A lock tells the router to leave a model alone. When the session runs on a locke
 
 The full dashboard is the `/cr` pane: cost, tokens and time, skills, MCP, plugins, context, 5h / 7d usage, the **Keep warm** clock (time left in the window and the countdown to the next ping), and the running and finished agents. It opens at session start, 24 rows tall. Drag or resize it with the engine's pane controls, or dock it beside the chat on a wide terminal, so it does not cover the conversation. The band above the prompt shows every row again (route, agents, skills, MCP, plugins, context, 5h / 7d, keep-warm). Claude Code places and sizes that band, so a mod cannot make it draggable; only the pane drags. To keep the chat clear, `/cr-band route` shrinks the band to the **task bar** (● task name, a bar with a `Tasks 2/4` pill, the percent, a small crab and the agent count) over the model route line, and `/cr-band full` brings every row back. Claude Code's own collapse (`[-]`, ctrl+x ctrl+a) also works on it.
 
-**Bars show real values and never move.** Every bar is one text line tall, like the Savvy Progress reference, and holds a 4-row dot matrix: each cell is a braille character (a 2 x 4 grid of dots) with a fixed random subset lit, the same texture on every bar. The filled part shows it in the accent, the part still ahead shows the same dots very dim, so a fill reads as the texture being revealed. Each bar has a 1px black contour (a single-line border). The terminal draws it as a one-row Raster, the desktop as Text runs. The fill is the measured share: context, 5h and 7d are their percent; a task is its finished subagents over all of them; a pane row is its share of the session's tokens. No reading yet means an all-dim bar. Opacity is eased, not linear: the fill is dim at its tail and brightens toward the leading edge on a power curve, and the track ahead fades out on a smoothstep. The `Tasks 2/4` capsule sits at the edge of the fill (left at 0%, moving right as it grows). The Jev chip is pink. The small crab beside the percent is the reference crab (eyes, side arms, four legs): a Raster in the terminal, one line of five braille characters on the desktop, the height of the text beside it.
+**Bars show real values and never move.** Every bar is one text line tall, like the Savvy Progress reference, and holds a 4-row dot matrix: each cell is a braille character (a 2 x 4 grid of dots) with a fixed random subset lit, the same texture on every bar. The filled part shows it in the accent, the part still ahead shows the same dots very dim, so a fill reads as the texture being revealed. Each bar has a 1px black contour (a single-line border). The terminal draws it as a one-row Raster, the desktop as Text runs. The fill is the measured share: context, 5h and 7d are their percent; a task is its finished subagents over all of them; a pane row is the share of its prompt's tokens spent by sub-agents (see below), on a bar of 6 to 20 columns depending on the pane width. No reading yet means an all-dim bar. Opacity is eased, not linear: the fill is dim at its tail and brightens toward the leading edge on a power curve, and the track ahead fades out on a smoothstep. The `Tasks 2/4` capsule sits at the edge of the fill (left at 0%, moving right as it grows). The Jev chip is pink. The small crab beside the percent is the reference crab (eyes, side arms, four legs): a Raster in the terminal, one line of five braille characters on the desktop, the height of the text beside it.
+
+**Row bars** show the share of the prompt's tokens spent by sub-agents: a prompt row is its agents' tokens over all the prompt's tokens (0 with no agent), an agent row is its own share of its prompt.
 
 **Fable usage bar.** The band and the pane have a `Fable · session` row: the share of this session's tokens that ran on Fable. Claude Code reports only the 5h and 7d windows (and a gateway spend limit), not how much of the weekly limit went to Fable, so the plan's 50% Fable cap cannot be read from here. If the engine ever reports a window that names Fable, the row shows that reading as `Fable · plan` instead.
 
@@ -145,7 +171,7 @@ Set them from the prompt; they persist across reloads.
 |---|---|
 | `/cr-engine jev` | Jev picks haiku / sonnet / opus. Needs `TYPESAFE_API_KEY` in the environment. |
 | `/cr-engine rules` | Local keyword rules (default). |
-| `/cr-warm 2h` (short: `/cr-kw 2h`) | Keep the prompt cache warm for 2h (default 2h, max 6h). |
+| `/cr-warm 2h` (short: `/cr-kw 2h`) | Keep the prompt cache warm for 2h (default 2h, max 8h). |
 | `/cr-warm off` | Stop. |
 | `/cr-pin <model> [effort]` / `pin auto` | Force a model (and effort), effective next request. |
 | `/cr-lock <model\|all\|none>` / `unlock <model\|all>` | Leave a model alone (no rerouting, no caps), subagents included. Fable is locked by default. |
@@ -155,6 +181,12 @@ Set them from the prompt; they persist across reloads.
 | `/cr-band <full\|route\|off>` | Band above the prompt: every row, only the task bar and the model route, or closed. The band also has a close control (✕ in the terminal, the native close mark on the desktop) that sets `off`; `band full` brings it back. The pane is separate and stays open. |
 | `/cr-creative <opus\|fable\|off>` | Where flagship creative work goes: Opus `xhigh` (default), Fable `high`, or no creative routing. |
 | `/cr-creative cap <effort>` | Highest effort creative work may run at (default `xhigh`). |
+| `/cr-orchestrator <on\|off>` (short: `/cr-orch`) | Orchestrator mode: the session model is never rerouted, sub-agents keep the model and effort their file or call set. Off by default. |
+| `/cr-orchestrator hands on` | Lifts the manager guard (emergency), keeps the rules loaded, band shows amber. |
+| `/cr-deck` | The agent deck as text: model, effort, who set them, tokens and cost per agent. |
+| `/cr-prices` | Reload the price table and say which prices are filled in. |
+| `/cr-log` / `/cr-log last` | This session's log as a table, or the previous session's. |
+| `/cr-review [n]` | One Sonnet agent reads the last n logs (default 10) and proposes at most five edits. |
 | `/cr-status` | Show the current options. |
 
 **Jev**: it only chooses the tier; Claude still does the work. Each turn sends the prompt text (first 4000 characters) to `api.typesafe.ai` once per thread, the main conversation and each subagent, and costs one small Jev call (about 0.3 s); the following requests of the turn reuse the answer. In the band, `jev` sits beside `haiku sonnet opus` on the Model route row: lit when Jev made the pick, dim when the rules did. Once Jev has been used, a `Jev · context` bar appears: the last call's input tokens against Jev's 64k per-request window, with the call count. A Jev pick shows `jev` on the band's second line (the line is otherwise hidden unless a guard limit applied). With no key, an error or a 2.5 s timeout, the rules decide, so nothing blocks.
@@ -183,11 +215,15 @@ Routing lives in `hooks/route.ts`: edit the `HEAVY`, `HEAVY_WEAK`, `MID` and `LI
 | `hooks/register.ts` | Hook and command registration, state, `/cr` |
 | `hooks/route.ts` | Model and effort heuristics |
 | `hooks/guard.ts` | Cost guards: effort ceiling, plan/execute split, budget, context cap, pin |
-| `hooks/band.ts` | The band above the prompt |
+| `hooks/orchestrate.ts` | Orchestrator mode: who set a sub-agent's model and effort, agent-file lookup, environment overrides |
+| `hooks/sessionlog.ts` | Session log lines (`.jsonl`, `.md`), verdict counting, the `/cr-review` brief |
+| `hooks/band.ts` | The band above the prompt, the model shown as `[sonnet]` |
 | `hooks/pane.ts` | The `/cr` pane |
 | `hooks/pixel.ts`, `format.ts`, `lists.ts` | Sprites, formatting, list rows |
 | `tests/router.test.ts` | Routing tests |
 | `tests/copy.test.ts` | Creative cases, floor, guard and `creative` options |
+| `tests/log.test.ts` | Session log lines, what is never recorded, verdicts, `/cr-log` |
+| `tests/orchestrator.test.ts` | Pass-through of set models and efforts, the routed default, orchestrator mode, warnings, the deck |
 
 ## Notes
 

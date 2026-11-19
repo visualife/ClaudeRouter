@@ -140,8 +140,8 @@ export const MODEL_IDS: Record<Model, string> = {
 }
 
 // The model family a full model id belongs to, or null when it names none
-export function familyOf(id: string): Model | null {
-  const lower = id.toLowerCase()
+export function familyOf(id: string | undefined): Model | null {
+  const lower = (id ?? '').toLowerCase()
   return KNOWN.find(f => lower.includes(f)) ?? null
 }
 

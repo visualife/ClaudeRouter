@@ -7,7 +7,7 @@ import { carriesOn, pickRoute, roleOf } from '../hooks/route'
 
 const PLUGIN = 'agent-ClaudeRouter'
 const SCROLL = { offset: 0, bodyRows: 20 }
-const BAND = { hasSurvey: false, isWorking: true, maxRows: 30, bodyColumns: 100, scroll: SCROLL, view: {} }
+const BAND = { hasSurvey: false, isCollapsed: false, isWorking: true, maxRows: 30, bodyColumns: 100, scroll: SCROLL, view: {} }
 const PANE = { title: 'ClaudeRouter', isFocused: false, bodyColumns: 100, placement: 'inline' as const, scroll: SCROLL, view: {} }
 const USAGE = {
   startedAt: 0,
@@ -200,7 +200,7 @@ test('/cr: options: engine and keep-warm', () => {
   expect(jev.next?.engine).toBe('jev')
   expect(applyArgs('engine gpt', DEFAULT_OPTIONS, 0).next).toBe(null)
   expect(applyArgs('warm 90m', DEFAULT_OPTIONS, 1000).next?.warmUntil).toBe(1000 + 90 * 60_000)
-  expect(applyArgs('warm 99h', DEFAULT_OPTIONS, 0).next?.warmUntil).toBe(6 * 3_600_000)
+  expect(applyArgs('warm 99h', DEFAULT_OPTIONS, 0).next?.warmUntil).toBe(8 * 3_600_000)
   expect(applyArgs('warm off', { ...DEFAULT_OPTIONS, warmUntil: 5 }, 0).next?.warmUntil).toBe(0)
   expect(applyArgs('warm soon', DEFAULT_OPTIONS, 0).next).toBe(null)
 })
@@ -261,14 +261,14 @@ test('keep-warm off sends no ping', { timeoutMs: 120_000 }, async ($, on) => {
 })
 
 test('Jev reports the tokens of its call for the context bar', async () => {
-  const pick = await askJev(ok({ answers: { route: { choice: 'sonnet', probabilities: { sonnet: 0.7 } } }, usage: { input_tokens: 865, output_tokens: 162 } }), 'k', INPUT)
+  const pick = await askJev(ok({ answers: { route: { choice: 'sonnet', probabilities: { sonnet: 0.7 } } }, usage: { input_tokens: 865, output_tokens: 162, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, model: 'm' } }), 'k', INPUT)
   expect(pick).toMatchObject({ model: 'sonnet', input: 865, output: 162 })
 })
 
 test('with the Jev engine the band lights jev and draws its context bar', async ($, on) => {
   world(on)
   on('env.get', () => ({ value: 'key' }))
-  on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ answers: { route: { choice: 'opus', probabilities: { opus: 0.9 } } }, usage: { input_tokens: 16000, output_tokens: 160 } }) } }))
+  on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ answers: { route: { choice: 'opus', probabilities: { opus: 0.9 } } }, usage: { input_tokens: 16000, output_tokens: 160, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, model: 'm' } }) } }))
   on('turn.step', async function* (_$, e) {
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
   })
@@ -277,8 +277,8 @@ test('with the Jev engine the band lights jev and draws its context bar', async 
   await $.turn.start({ turnId: 't1', text: 'list the files' })
   for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-sonnet-5-5', effort: 'low', messageCount: 1 })) { /* drain */ }
   const band = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: PLUGIN, props: PANE })
-  expect((await band.find({ type: 'Text', text: /Jev · context/ }))).toBeTruthy()
-  expect((await band.find({ type: 'Text', text: /16k \/ 64k · 25% · 1 calls/ }))).toBeTruthy()
+  expect((await band.find({ type: 'Text', text: /◈ Jev/ }))).toBeTruthy()
+  expect((await band.find({ type: 'Text', text: /16k\/64k · 1 calls/ }))).toBeTruthy()
   await band.unmount()
 })
 
@@ -286,12 +286,12 @@ test('the pane shows the keep-warm clock: off by default, a countdown once a win
   world(on)
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const off = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: PLUGIN, props: PANE })
-  expect(await off.find({ type: 'Text', text: /off · \/cr-warm 2h/ })).toBeTruthy()
+  expect(await off.find({ type: 'Text', text: /Keep warm off · \/cr-warm 2h/ })).toBeTruthy()
   await off.unmount()
 
   await $.command.run({ command: 'cr-warm', args: '2h', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
   const onPane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: PLUGIN, props: PANE })
-  expect(await onPane.find({ type: 'Text', text: /on · 1(19|20):\d\d left · first ping 50 min after your next request/ })).toBeTruthy()
+  expect(await onPane.find({ type: 'Text', text: /Keep warm on · 1(19|20):\d\d left · ping after your next request/ })).toBeTruthy()
   await onPane.unmount()
 })
 
@@ -321,20 +321,20 @@ test('the Fable bar shows the share of the session tokens that ran on Fable', as
   })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const empty = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: PLUGIN, props: PANE })
-  expect(await empty.find({ type: 'Text', text: /Fable · session/ })).toBeTruthy()
-  expect(await empty.find({ type: 'Text', text: /^no reading$/ })).toBeTruthy()
+  expect(await empty.find({ type: 'Text', text: /✧ Fable/ })).toBeTruthy()
+  expect(await empty.find({ type: 'Text', text: /^—$/ })).toBeTruthy()
   await empty.unmount()
 
   // one turn on Fable (locked, passed through), one on Sonnet
   await $.turn.start({ turnId: 't1', text: 'hello' })
   for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-fable-5-2', effort: 'high', messageCount: 1 })) { /* drain */ }
-  await $.turn.complete({ turnId: 't1', reason: 'answer', isAborted: false, durationMs: 100, answer: '', usage: { input_tokens: 2000, output_tokens: 1000 } })
+  await $.turn.complete({ turnId: 't1', reason: 'answer', isAborted: false, durationMs: 100, answer: '', usage: { input_tokens: 2000, output_tokens: 1000, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, model: 'm' } })
   await $.turn.start({ turnId: 't2', text: 'write the tests' })
   for await (const _ of $.turn.step({ turnId: 't2', index: 0, model: 'claude-sonnet-5-5', effort: 'low', messageCount: 1 })) { /* drain */ }
-  await $.turn.complete({ turnId: 't2', reason: 'answer', isAborted: false, durationMs: 100, answer: '', usage: { input_tokens: 800, output_tokens: 200 } })
+  await $.turn.complete({ turnId: 't2', reason: 'answer', isAborted: false, durationMs: 100, answer: '', usage: { input_tokens: 800, output_tokens: 200, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, model: 'm' } })
 
   const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: PLUGIN, props: PANE })
-  expect(await pane.find({ type: 'Text', text: /3k \/ 4k · 75% of session/ })).toBeTruthy()
+  expect(await pane.find({ type: 'Text', text: /75% of session/ })).toBeTruthy()
   await pane.unmount()
 })
 
@@ -406,7 +406,7 @@ test('Jev is asked once per turn, not before every request, and not about a prom
   on('env.get', () => ({ value: 'key' }))
   on('http.fetch', () => {
     calls += 1
-    return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ answers: { route: { choice: 'sonnet', probabilities: { sonnet: 0.9 } } }, usage: { input_tokens: 900, output_tokens: 100 } }) } }
+    return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ answers: { route: { choice: 'sonnet', probabilities: { sonnet: 0.9 } } }, usage: { input_tokens: 900, output_tokens: 100, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, model: 'm' } }) } }
   })
   on('turn.step', async function* (_$, e) {
     return STEP_DONE(e)

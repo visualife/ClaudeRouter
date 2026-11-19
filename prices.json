@@ -1,0 +1,10 @@
+{
+  "unit": "USD per million tokens",
+  "note": "Empty on purpose: fill each number from the pricing page. null = not filled in, and the deck says 'prices missing'. A copy at ~/.claude/clauderouter-prices.json overrides this file field by field, so an update of the plugin does not erase your prices.",
+  "models": {
+    "haiku":  { "input": null, "output": null, "cacheWrite": null, "cacheRead": null },
+    "sonnet": { "input": null, "output": null, "cacheWrite": null, "cacheRead": null },
+    "opus":   { "input": null, "output": null, "cacheWrite": null, "cacheRead": null },
+    "fable":  { "input": null, "output": null, "cacheWrite": null, "cacheRead": null }
+  }
+}

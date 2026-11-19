@@ -2,6 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { directiveOf, guard, type GuardInput } from '../hooks/guard'
 import { applyArgs, DEFAULT_OPTIONS } from '../hooks/options'
+import { isPlanner } from '../hooks/route'
 
 const BASE: GuardInput = {
   pick: { model: 'opus', effort: 'xhigh', conf: 0.9 },
@@ -82,7 +83,6 @@ test('/cr-pin, cap, budget and ctx', () => {
 })
 
 test('a custom planner or architect subagent may use Opus; others may not', async () => {
-  const { isPlanner } = await import('../hooks/route')
   expect(isPlanner('Plan')).toBe(true)
   expect(isPlanner('planner')).toBe(true)
   expect(isPlanner('agent-ClaudeRouter:planner')).toBe(true)

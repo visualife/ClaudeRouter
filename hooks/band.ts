@@ -4,6 +4,8 @@ import { JEV_WINDOW } from './jev'
 import { familyOf } from './route'
 import { ACCENT, DEFAULT, type Anim, type Cell, type Role, type Tone, MINI_COLUMNS, MINI_ROWS, barLine, filledOf, miniCells, miniLine, packCells, pillRows, spriteCells, SPRITE_COLUMNS, SPRITE_ROWS } from './pixel'
 import { fmtFit, fmtPct, fmtTime, fmtTokens } from './format'
+import { byText } from './orchestrate'
+import type { Prices } from '../types'
 
 export type Els = Elements['terminal']
 
@@ -18,6 +20,10 @@ export type Snapshot = {
   usage: Usage | null
   jev: JevUse | null
   totals: { tokens: number; turns: number }
+  // Environment variables that override every model and effort choice, and whether the session is the orchestrator
+  warnings: string[]
+  prices: Prices
+  orchestrator: 'on' | 'hands' | 'off'
   now: number
   // Keep-warm window: when it ends and when the next ping is due (null until the first request); null while off
   warm: { until: number; pingAt: number | null } | null
@@ -30,7 +36,7 @@ export type Snapshot = {
 
 // Text uses theme keys so light and dark both read; Rasters use the design's accents
 export const MODEL_TONE = { haiku: 'success', sonnet: 'suggestion', opus: 'warning', fable: 'claude' } as const
-const EFFORT_LEVEL = { low: 1, medium: 2, high: 3, xhigh: 4 } as const
+const EFFORT_LEVEL = { low: 1, medium: 2, high: 3, xhigh: 4, max: 4 } as const
 const MODELS = ['haiku', 'sonnet', 'opus', 'fable'] as const
 const LABEL = 16
 // Jev's own colour: pink, so it never reads as the orange of ClaudeRouter or Fable
@@ -96,6 +102,9 @@ export function crab(els: Els, t: Snapshot, key: string, role: Role, running: bo
 
 const barWidth = (t: Snapshot) => Math.max(8, Math.min(30, t.columns - 46))
 
+// Primary text: a light grey, a touch under white, so it stays brighter than 'subtle'
+const LIGHT = '#d4d4d4'
+
 function label(els: Els, glyph: string, text: string, color = 'subtle'): RenderElement {
   return els.Box({ width: LABEL, children: [els.Text({ children: [`${glyph} ${text}`], color })] })
 }
@@ -112,15 +121,26 @@ function header(els: Els, t: Snapshot): RenderElement[] {
   const title = Box({
     flexDirection: 'row',
     columnGap: 2,
-    children: [Text({ children: ['ClaudeRouter'], bold: true, color: 'claude' }), Text({ children: [`${sub} · turn ${t.totals.turns + running.length}`], color: 'subtle' })],
+    children: [
+      Text({ children: ['ClaudeRouter'], color: 'claude' }),
+      Text({ children: [`${sub} · turn ${t.totals.turns + running.length}`], color: 'subtle' }),
+      ...(t.orchestrator === 'on' ? [Text({ children: ['orchestrator · manager only'], color: 'suggestion' })] : []),
+      // Hands on is the emergency mode: amber, so it is never mistaken for the manager
+      ...(t.orchestrator === 'hands' ? [Text({ children: ['orchestrator · HANDS ON (guard off)'], color: 'warning' })] : []),
+    ],
   })
-  if (!t.terminal || t.rows < CREW_MIN_ROWS) return [title]
+  if (!t.terminal || t.rows < CREW_MIN_ROWS) return [title, ...warnRows(els, t)]
   const room = Math.max(0, Math.floor((t.columns - SPRITE_COLUMNS) / (SPRITE_COLUMNS + 1)))
   const crew = [
     crab(els, t, 'crab-router', 'router', running.length > 0),
     ...agents.slice(0, Math.min(4, room)).map((a, i) => crab(els, t, `crab-${i}`, a.role, true)),
   ]
-  return [Box({ flexDirection: 'row', columnGap: 1, children: crew }), title]
+  return [Box({ flexDirection: 'row', columnGap: 1, children: crew }), title, ...warnRows(els, t)]
+}
+
+// One line per environment override: they beat every choice the deck shows, so they are said where the deck is
+export function warnRows(els: Els, t: Snapshot): RenderElement[] {
+  return t.warnings.map(w => els.Text({ children: [`⚠ ${fmtFit(w, Math.max(40, t.columns - 4))}`], color: 'warning' }))
 }
 
 function routeRows(els: Els, r: Route): RenderElement[] {
@@ -130,15 +150,14 @@ function routeRows(els: Els, r: Route): RenderElement[] {
   const prev = familyOf(r.engineModel)
   const chips = MODELS.map(m =>
     Text({
-      children: [m === prev && !r.kept ? `[${m}]` : ` ${m} `],
+      // The model in use is bracketed, [sonnet]; the one it switched from, when it did, is in parentheses
+      children: [m === r.model ? `[${m}]` : m === prev && !r.kept ? `(${m})` : ` ${m} `],
       color: MODEL_TONE[m],
-      bold: m === r.model,
-      inverse: m === r.model,
       dimColor: m !== r.model && m !== prev,
     }),
   )
   // Jev sits beside the tiers: lit when it made this pick, dim when the rules did
-  chips.push(Text({ children: [' jev '], color: JEV_PINK, bold: r.by === 'jev', inverse: r.by === 'jev', dimColor: r.by !== 'jev' }))
+  chips.push(Text({ children: [' jev '], color: JEV_PINK, inverse: r.by === 'jev', dimColor: r.by !== 'jev' }))
   const signal = [1, 2, 3, 4].map(i => Text({ children: ['▂▄▆█'[i - 1] ?? ' '], color: i <= level ? MODEL_TONE[r.model] : 'inactive' }))
   const confBar = '▬'.repeat(Math.round(r.conf * 5)).padEnd(5, '·')
   return [
@@ -161,7 +180,7 @@ function taskRows(els: Els, t: Snapshot, task: Task): RenderElement[] {
   const head = row(els, [
     Box({
       width: LABEL,
-      children: [Text({ children: [`● ${fmtFit(task.name, LABEL - 3)}`], bold: true, color: task.status === 'failed' ? 'error' : 'text' })],
+      children: [Text({ children: [`● ${fmtFit(task.name, LABEL - 3)}`], color: task.status === 'failed' ? 'error' : LIGHT })],
     }),
     bar(els, `task-${task.id}`, t, barWidth(t), toneOf(task.status), taskPct(task), accentOf(task.model)),
     Text({ children: [status], color: 'subtle' }),
@@ -176,9 +195,10 @@ function taskRows(els: Els, t: Snapshot, task: Task): RenderElement[] {
       columnGap: 1,
       children: [
         Text({ children: [`   └ ${fmtFit(a.name, 28)} ·`], color: 'subtle' }),
-        Text({ children: [state], color: a.status === 'failed' ? 'error' : a.status === 'done' ? 'success' : family ? MODEL_TONE[family] : 'text' }),
+        Text({ children: [state], color: a.status === 'failed' ? 'error' : a.status === 'done' ? 'success' : family ? MODEL_TONE[family] : LIGHT }),
         Text({ children: ['·'], color: 'subtle' }),
-        Text({ children: [` ${family ?? a.model ?? '—'} `], color: family ? MODEL_TONE[family] : 'subtle', inverse: family !== null }),
+        Text({ children: [`[${family ?? a.model ?? '—'}]`], color: family ? MODEL_TONE[family] : 'subtle' }),
+        Text({ children: [`${a.effort ?? '—'} · set by ${byText(a.by)}`], color: 'subtle' }),
         Text({ children: [`· ${fmtTime(seconds)}`], color: 'subtle' }),
       ],
     })
@@ -218,7 +238,7 @@ function listCell(els: Els, t: Snapshot, glyph: string, name: string, items: str
     columnGap: 1,
     children: [
       Text({ children: [`${glyph} ${name}`], color: 'subtle' }),
-      ...(items.length > 0 ? items.map(s => Text({ children: [s] })) : [Text({ children: [empty], color: 'subtle' })]),
+      ...(items.length > 0 ? items.map(s => Text({ children: [s], color: LIGHT })) : [Text({ children: [empty], color: 'subtle' })]),
       Text({ children: [total], color: 'subtle' }),
     ],
   })
@@ -312,12 +332,12 @@ export function taskBar(els: Els, t: Snapshot): RenderElement[] {
           width: 20,
           flexDirection: 'row',
           columnGap: 1,
-          children: [Text({ children: ['●'], color: MODEL_TONE[familyOf(task.model ?? '') ?? 'sonnet'] }), Text({ children: [fmtFit(task.name, 17)], bold: true })],
+          children: [Text({ children: ['●'], color: MODEL_TONE[familyOf(task.model ?? '') ?? 'sonnet'] }), Text({ children: [fmtFit(task.name, 17)], color: LIGHT })],
         }),
         bar(els, `taskbar-${task.id}`, t, width, toneOf(task.status), pct, accent, label),
         Text({ children: [pct === null ? '…' : fmtPct(pct)], color: 'subtle' }),
         crabEl,
-        Text({ children: [`×${Math.max(1, total)}`], bold: true }),
+        Text({ children: [`×${Math.max(1, total)}`], color: LIGHT }),
       ],
     }),
   ]

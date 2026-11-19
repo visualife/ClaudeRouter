@@ -185,18 +185,21 @@ export function barRows(width: number, rows: number, tone: Tone, pct: number | n
 // is a 2 x 4 grid of dots, so a single line holds a 4-row dot matrix. Each column has a fixed random subset lit (about
 // half, never none and never all), the same on every bar. The fill is that texture in the accent with the eased
 // shades, the track ahead the same texture very dim.
-function dotsAt(x: number): string {
+function dotsAt(x: number, last = -1): string {
   let mask = 0
   for (let bit = 0; bit < 8; bit++) if (hash(x * 8 + bit, 11) < 0.5) mask |= 1 << bit
   if (mask === 0) mask = 0x01
   if (mask === 0xff) mask = 0x7f
+  // The end cells carry their whole outer column of dots, so the bar's border touches the dots instead of a gap
+  if (x === 0) mask |= 0x47
+  if (x === last) mask |= 0xb8
   return String.fromCodePoint(0x2800 + mask)
 }
 
 export function barLine(width: number, tone: Tone, pct: number | null, accent: number): Cell[] {
   const color = tone === 'fail' ? ACCENT.fail : accent
   const filled = filledOf(width, pct)
-  return Array.from({ length: width }, (_, x): Cell => [dotsAt(x), x >= filled ? shade(GHOST, snap(ghostLevel(x, filled, width))) : shade(color, snap(fillLevel(x, 0, filled)))])
+  return Array.from({ length: width }, (_, x): Cell => [dotsAt(x, width - 1), x >= filled ? shade(GHOST, snap(ghostLevel(x, filled, width))) : shade(color, snap(fillLevel(x, 0, filled)))])
 }
 
 // The "Tasks 2/4" capsule: dark text on the accent, full height, riding the edge of the fill and held inside the bar
