@@ -1,6 +1,6 @@
 // The state contract: every value ClaudeRouter keeps in $.state, declared under the mod's name
 
-// fable is never picked by the router: it is the user's own choice (/model, pin or @fable) and is left alone
+// fable is picked by the router only for flagship creative work (the default creative setting); otherwise it is the user's own choice (/model, pin or @fable) and is left alone
 export type Model = 'haiku' | 'sonnet' | 'opus' | 'fable'
 // max is never picked or pinned by the router: it only appears when an agent file or an Agent call set it
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'

@@ -18,7 +18,7 @@ export type RouteInput = {
   tools: readonly string[]
   subagentType?: string
   current?: Model | null
-  // Where flagship creative work goes (/cr-creative); opus when unset
+  // Where flagship creative work goes (/cr-creative); fable when unset
   creative?: CreativeMode
   // The route the previous main-thread turn ended on. A short prompt with no signal of its own ("yes go ahead",
   // "oui vas-y", "continue") carries on with it instead of being scored as a light request.
@@ -111,7 +111,7 @@ export function creativeOf(text: string): Creative | null {
 export const isCopy = (text: string): boolean => creativeOf(text) !== null
 
 // Creative work is set to its case's tier whoever picked (the rules or Jev). An Explore subagent only reads: left alone.
-export function creativeFloor(pick: RoutePick, input: RouteInput, mode: CreativeMode = input.creative ?? 'opus'): RoutePick {
+export function creativeFloor(pick: RoutePick, input: RouteInput, mode: CreativeMode = input.creative ?? 'fable'): RoutePick {
   const kind = mode === 'off' || input.subagentType === 'Explore' ? null : creativeOf(input.text)
   if (!kind) return pick
   const conf = Math.max(pick.conf, 0.9)
@@ -124,7 +124,7 @@ export const copyFloor = creativeFloor
 
 const EDITS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']
 const SEARCH = ['Glob', 'Grep', 'Read']
-// The tiers the router scores by itself. Fable is never picked automatically: the user chooses it.
+// The tiers the router scores by itself. Fable is not scored: it is picked only for flagship creative work (default), or by the user.
 export type Auto = 'haiku' | 'sonnet' | 'opus'
 const FAMILIES: Auto[] = ['haiku', 'sonnet', 'opus']
 const KNOWN: Model[] = [...FAMILIES, 'fable']
@@ -169,7 +169,7 @@ function signalsOf(text: string) {
 
 // True when a main-thread prompt says nothing about the work ("yes go ahead", "oui vas-y", "continue") and a
 // previous turn exists to carry on from. It used to score as a short light request: Haiku at low effort, for the
-// turn that runs the plan just approved. Fable is never carried: the router does not pick it by itself.
+// turn that runs the plan just approved. Fable is never carried: only flagship creative work picks it, and that is set each turn.
 export function carriesOn(input: RouteInput): boolean {
   if (!input.prev || !isAuto(input.prev.model) || input.subagentType || input.text.length >= SHORT) return false
   const s = signalsOf(input.text)
@@ -197,7 +197,7 @@ export function pickRoute(input: RouteInput): RoutePick {
   const [top, second] = ranked
   let model: Auto = top && second && top[1] > second[1] ? top[0] : 'sonnet'
   // Hysteresis: stay on the current model unless the new one beats it by more than HYSTERESIS (softmax share).
-  // Only for tiers the router scores: Fable has no score, so it never takes part.
+  // Only for tiers the router scores: Fable has no score (flagship creative work sets it by default), so it never takes part.
   const total = FAMILIES.reduce((s, m) => s + Math.exp(score[m]), 0)
   const share = (m: Auto) => Math.exp(score[m]) / total
   const cur = isAuto(input.current) ? input.current : null

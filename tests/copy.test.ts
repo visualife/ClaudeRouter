@@ -75,7 +75,8 @@ test('each creative case is told apart: flagship, craft, bulk', () => {
 })
 
 test('the router sends each case to its tier', () => {
-  expect(pickRoute({ text: 'write a tagline', tools: [] })).toMatchObject({ model: 'opus', effort: 'xhigh' })
+  expect(pickRoute({ text: 'write a tagline', tools: [] })).toMatchObject({ model: 'fable', effort: 'high' })
+  expect(pickRoute({ text: 'write a tagline', tools: [], creative: 'opus' })).toMatchObject({ model: 'opus', effort: 'xhigh' })
   expect(pickRoute({ text: 'write a tagline', tools: [], creative: 'fable' })).toMatchObject({ model: 'fable', effort: 'high' })
   expect(pickRoute({ text: 'rédige la fiche produit du baume', tools: [] })).toMatchObject({ model: 'opus', effort: 'high' })
   expect(pickRoute({ text: 'rédige la fiche produit du baume', tools: [], creative: 'fable' })).toMatchObject({ model: 'opus', effort: 'high' })
@@ -93,7 +94,8 @@ test('the router sends each case to its tier', () => {
 
 test('the creative floor also sets a pick made by Jev', () => {
   const input = { text: 'three slogans for the brand', tools: [] }
-  expect(creativeFloor({ model: 'haiku', effort: 'low', conf: 0.7 }, input)).toMatchObject({ model: 'opus', effort: 'xhigh', conf: 0.9 })
+  expect(creativeFloor({ model: 'haiku', effort: 'low', conf: 0.7 }, input)).toMatchObject({ model: 'fable', effort: 'high', conf: 0.9 })
+  expect(creativeFloor({ model: 'haiku', effort: 'low', conf: 0.7 }, input, 'opus')).toMatchObject({ model: 'opus', effort: 'xhigh', conf: 0.9 })
   expect(creativeFloor({ model: 'haiku', effort: 'low', conf: 0.7 }, input, 'fable')).toMatchObject({ model: 'fable', effort: 'high' })
   expect(copyFloor({ model: 'haiku', effort: 'low', conf: 0.7 }, { text: 'list the files', tools: [] })).toMatchObject({ model: 'haiku', effort: 'low' })
 })

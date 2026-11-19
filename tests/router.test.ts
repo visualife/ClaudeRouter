@@ -352,7 +352,7 @@ test('a short prompt with no signal carries on with the route the last turn ende
   expect(pickRoute({ text: 'yes go ahead', tools: [] }).model).toBe('haiku')
   // a prompt with a signal of its own is scored, whatever came before
   expect(pickRoute({ text: 'list the files', tools: [], prev }).model).toBe('haiku')
-  expect(pickRoute({ text: 'write a tagline', tools: [], prev }).model).toBe('opus')
+  expect(pickRoute({ text: 'write a tagline', tools: [], prev }).model).toBe('fable')
   // Fable is never carried, and a subagent has no previous turn
   expect(pickRoute({ text: 'yes go ahead', tools: [], prev: { model: 'fable', effort: 'high' } }).model).toBe('haiku')
   expect(carriesOn({ text: 'continue', tools: [], subagentType: 'general-purpose', prev })).toBe(false)
