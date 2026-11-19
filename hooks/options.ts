@@ -12,6 +12,13 @@ export const DEFAULT_OPTIONS: Options = {
   ctxCap: 150_000,
   // A session on a locked model is left alone: no rerouting, no caps. Fable is locked by default.
   locks: ['fable'],
+  band: 'full',
+  // Flagship creative work goes to Opus at xhigh; Fable is opt-in (/cr creative fable)
+  creative: 'opus',
+  creativeCap: 'xhigh',
+  // Off: the router behaves as it always did. On: the session is the orchestrator (see Options.orchestrator).
+  orchestrator: 'off',
+  rules: null,
 }
 export const ALL_MODELS: Model[] = ['haiku', 'sonnet', 'opus', 'fable']
 const isModel = (s: string): s is Model => (ALL_MODELS as string[]).includes(s)
@@ -25,25 +32,38 @@ export function normalize(saved: Partial<Options> & { fableLock?: boolean }): Op
 // A ping every 50 minutes keeps a one-hour prompt cache read instead of re-written
 export const WARM_EVERY_MS = 50 * 60 * 1000
 const WARM_DEFAULT_MS = 2 * 60 * 60 * 1000
-const WARM_MAX_MS = 6 * 60 * 60 * 1000
+const WARM_MAX_MS = 8 * 60 * 60 * 1000
 
 export const USAGE = [
-  '/clauderouter                 open the pane',
-  '/clauderouter engine jev      let Jev pick the model tier (needs TYPESAFE_API_KEY)',
-  '/clauderouter engine rules    use the local keyword rules (default)',
-  '/clauderouter warm [2h]       keep the prompt cache warm for 2h (max 6h)',
-  '/clauderouter warm off        stop keeping it warm',
-  '/clauderouter pin sonnet [medium]  force a model (and effort) from the next request, even mid-turn',
-  '/clauderouter pin auto        let the router decide again',
-  '/clauderouter pin fable [high]  force Fable (also "@fable ..." for one prompt)',
-  '/clauderouter lock opus       leave a session on that model alone: no rerouting, no caps (fable is locked by default)',
-  '/clauderouter unlock opus     route that model like the others again; "lock all" / "lock none" for every model',
-  '/clauderouter cap high        highest effort the router may pick by itself (default high)',
-  '/clauderouter budget 3        USD one turn may spend before it is downgraded (off = no limit)',
-  '/clauderouter ctx 150k        context size above which requests are downgraded (off = no limit)',
-  '/clauderouter status          show the current options',
+  '/cr                 open the pane, and bring back a closed band',
+  '/cr-engine jev      let Jev pick the model tier (needs TYPESAFE_API_KEY)',
+  '/cr-engine rules    use the local keyword rules (default)',
+  '/cr-warm [2h]       keep the prompt cache warm for 2h (max 8h)',
+  '/cr-warm off        stop keeping it warm (/cr-kw is the short form)',
+  '/cr-pin sonnet [medium]  force a model (and effort) from the next request, even mid-turn',
+  '/cr-pin auto        let the router decide again',
+  '/cr-pin fable [high]  force Fable (also "@fable ..." for one prompt)',
+  '/cr-lock opus       leave a session on that model alone: no rerouting, no caps (fable is locked by default)',
+  '/cr-unlock opus     route that model like the others again; "/cr-lock all" / "/cr-lock none" for every model',
+  '/cr-cap high        highest effort the router may pick by itself (default high)',
+  '/cr-budget 3        USD one turn may spend before it is downgraded (off = no limit)',
+  '/cr-ctx 150k        context size above which requests are downgraded (off = no limit)',
+  '/cr-band route      band above the prompt: task bar and model route only (full = every row, off = closed)',
+  '/cr-creative opus   flagship creative work (identity, naming, taglines, art direction) on Opus xhigh (default)',
+  '/cr-creative fable  flagship creative work on Fable high (uses your weekly Fable allowance)',
+  '/cr-creative off    route creative prompts like any other',
+  '/cr-creative cap high  highest effort creative work may run at (default xhigh)',
+  '/cr-orchestrator on     manager only: the session delegates, its file and shell tools are blocked, ~/.claude/orchestrator.md is loaded (/cr-orch is the short form)',
+  '/cr-orchestrator hands on   emergency: the block is lifted, the rules stay loaded',
+  '/cr-orchestrator off    back to routing the main model, no block (default)',
+  '/cr-status          show the current options',
   'Prompt prefix: "@sonnet:med ..." pins that one turn.',
 ].join('\n')
+
+// One slash command per option: /cr-warm 2h runs applyArgs('warm 2h'). The bare /cr opens the pane.
+export const OPTION_COMMANDS = ['engine', 'warm', 'pin', 'lock', 'unlock', 'cap', 'budget', 'ctx', 'band', 'creative', 'orchestrator', 'status'] as const
+// Short names: /cr-kw is /cr-warm, /cr-orch is /cr-orchestrator
+export const OPTION_ALIASES: Record<string, (typeof OPTION_COMMANDS)[number]> = { kw: 'warm', orch: 'orchestrator' }
 
 // "90m", "2h", "45" (minutes) -> ms, or null
 export function parseWindow(s: string): number | null {
@@ -69,15 +89,20 @@ export function parseTokens(s: string): number | null {
   return n > 0 ? Math.round(n) : null
 }
 
+// The orchestrator mode as /cr-status says it
+export const modeText = (o: Options): string =>
+  `${o.orchestrator === 'on' ? 'on (manager only)' : o.orchestrator === 'hands' ? 'hands on (guard off)' : 'off'} · rules ${o.rules === null ? 'not loaded' : `loaded (${sizeText(o.rules)})`}`
+export const sizeText = (bytes: number): string => (bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} B`)
+
 export function describe(o: Options, now: number): string {
   const warm = o.warmUntil > now ? `on, ${Math.round((o.warmUntil - now) / 60_000)} min left` : 'off'
   const pin = o.pin ? `${o.pin}${o.pinEffort ? `/${o.pinEffort}` : ''}` : 'auto'
   const budget = o.budget > 0 ? `$${o.budget}/turn` : 'off'
   const ctx = o.ctxCap > 0 ? `${Math.round(o.ctxCap / 1000)}k` : 'off'
-  return `engine: ${o.engine} · model: ${pin} · locked: ${o.locks.length > 0 ? o.locks.join(', ') : 'none'} · max effort: ${o.maxEffort} · budget: ${budget} · ctx cap: ${ctx} · keep-warm: ${warm}`
+  return `engine: ${o.engine} · model: ${pin} · locked: ${o.locks.length > 0 ? o.locks.join(', ') : 'none'} · max effort: ${o.maxEffort} · creative: ${o.creative}${o.creative === 'off' ? '' : ` (cap ${o.creativeCap})`} · budget: ${budget} · ctx cap: ${ctx} · orchestrator: ${modeText(o)} · keep-warm: ${warm}`
 }
 
-// Applies one /clauderouter argument string. next is null when the args are not an option change.
+// Applies one /cr argument string. next is null when the args are not an option change.
 export function applyArgs(args: string, o: Options, now: number): { next: Options | null; text: string } {
   const [cmd = '', ...rest] = args.trim().split(/\s+/)
   const arg = rest.join(' ')
@@ -129,6 +154,30 @@ export function applyArgs(args: string, o: Options, now: number): { next: Option
       const tokens = parseTokens(arg)
       if (tokens === null) return { next: null, text: `ctx takes a size like 150k, or off\n${USAGE}` }
       return { next: { ...o, ctxCap: tokens }, text: tokens > 0 ? `context cap: ${Math.round(tokens / 1000)}k` : 'context cap: off' }
+    }
+    case 'band': {
+      const mode = arg.trim().toLowerCase()
+      if (mode !== 'full' && mode !== 'route' && mode !== 'off') return { next: null, text: `band takes full, route or off\n${USAGE}` }
+      return { next: { ...o, band: mode }, text: `band: ${mode}` }
+    }
+    case 'creative': {
+      const [a = '', b = ''] = arg.trim().toLowerCase().split(/\s+/)
+      if (a === 'cap') {
+        const effort = toEffort(b)
+        if (!effort) return { next: null, text: `creative cap takes ${EFFORTS.join(', ')}\n${USAGE}` }
+        return { next: { ...o, creativeCap: effort }, text: `creative effort ceiling: ${effort}` }
+      }
+      if (a !== 'opus' && a !== 'fable' && a !== 'off') return { next: null, text: `creative takes opus, fable, off or cap <effort>\n${USAGE}` }
+      const said = a === 'off' ? 'creative: off, routed like any other prompt' : `creative: flagship work on ${a === 'fable' ? 'Fable high' : 'Opus xhigh'}, craft on Opus high, bulk on Sonnet high`
+      return { next: { ...o, creative: a }, text: said }
+    }
+    case 'orchestrator': {
+      const word = arg.trim().toLowerCase().replace(/\s+/g, ' ')
+      const mode = word === 'hands' || word === 'hands on' ? 'hands' : word
+      if (mode !== 'on' && mode !== 'off' && mode !== 'hands') return { next: null, text: `orchestrator takes on, hands on or off\n${USAGE}` }
+      // "on" and "hands" are confirmed by the hooks once the rules file is found; this is the pure part
+      const said = mode === 'off' ? 'orchestrator: off' : `orchestrator: ${mode === 'on' ? 'on · manager only' : 'hands on · guard off'}`
+      return { next: { ...o, orchestrator: mode, ...(mode === 'off' ? { rules: null } : {}) }, text: said }
     }
     case 'status':
       return { next: null, text: describe(o, now) }

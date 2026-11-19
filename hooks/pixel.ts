@@ -10,7 +10,7 @@ export const ACCENT = {
   fable: 0x6cb6ff,
   brand: 0xe8835f,
   fail: 0xd9534f,
-  track: 0x55535b,
+  track: 0x403f48,
 }
 
 // One cell: a character, its foreground colour and its background (the terminal's by default)
@@ -23,9 +23,10 @@ export function packCells(rows: Cell[][]): string {
   return (new Uint8Array(words.buffer) as Uint8Array & { toBase64(): string }).toBase64()
 }
 
-// The crab, two frames (arm wave and step), from the design's BA / BB maps
-const BA = ['................', '................', '................', '..BBBBBBBBBBBB..', '..BBBBBBBBBBBB..', '..BBBEBBBBEBBB..', 'AABBBEBBBBEBBBAA', 'AABBBBBBBBBBBBAA', '..BRRBBBBBBRRB..', '..BBBBBBBBBBBB..', '...FF......FF...', '...FF......FF...']
-const BB = ['................', '................', '................', '..BBBBBBBBBBBB..', '..BBBBBBBBBBBBAA', '..BBBEBBBBEBBBAA', 'AABBBEBBBBEBBB..', 'AABBBBBBBBBBBB..', '..BRRBBBBBBRRB..', '..BBBBBBBBBBBB..', '...FF......FF...', '....FF....FF....']
+// The crab, two frames (arm wave and step). Matches the reference crab (the Savvy Progress bar): eyes in the
+// head, side arms, no mouth, four short legs that alternate.
+const BA = ['................', '................', '................', '..BBBBBBBBBBBB..', '..BBBBBBBBBBBB..', '..BBBEBBBBEBBB..', 'AABBBEBBBBEBBBAA', 'AABBBBBBBBBBBBAA', '..BBBBBBBBBBBB..', '..BBBBBBBBBBBB..', '...F.F....F.F...', '...F.F....F.F...']
+const BB = ['................', '................', '................', '..BBBBBBBBBBBB..', '..BBBBBBBBBBBBAA', '..BBBEBBBBEBBBAA', 'AABBBEBBBBEBBB..', 'AABBBBBBBBBBBB..', '..BBBBBBBBBBBB..', '..BBBBBBBBBBBB..', '...F.F....F.F...', '..F.F......F.F..']
 const PAL: Record<string, number> = {
   A: 0xd06e54, R: 0xd9706f, F: 0xb4573f, B: 0xe07a5f, E: 0x1a1214, W: 0xece9e4, K: 0x2b2a30,
   G: 0xa3a1a9, T: 0xb08a5a, P: 0xd9d6dd, N: 0x2f3a5c, Y: 0xe9c84a, Q: 0xa6d8ec,
@@ -71,7 +72,38 @@ function pixels(role: Role, step: boolean): (number | null)[][] {
 
 // Two pixel rows per terminal row: '▀' holds the top pixel in its foreground and the bottom in its background
 export function spriteCells(role: Role, mode: Mode, frame: number): string {
-  const px = pixels(role, mode === 'run' && Math.floor(frame / 4) % 2 === 1)
+  return packCells(pixelCells(pixels(role, mode === 'run' && Math.floor(frame / 4) % 2 === 1)))
+}
+
+// The small crab for the task bar: 11 x 4 pixels, exactly 2 terminal rows, so nothing is cut or padded out of the row.
+// The reference's shape: eyes, side arms, body, four legs.
+const MINI_A = ['..BEBBBEB..', 'ABBBBBBBBBA', '..BBBBBBB..', '..B.B.B.B..']
+const MINI_B = ['..BEBBBEB..', 'ABBBBBBBBBA', '..BBBBBBB..', '.B.B.B.B.B.']
+export const MINI_COLUMNS = 11
+export const MINI_ROWS = 2
+export function miniRows(step: boolean): Cell[][] {
+  const pal: Record<string, number> = { B: 0xe07a5f, A: 0xd06e54, E: 0x1a1214 }
+  const art = (step ? MINI_B : MINI_A).map(r => [...r].map((ch): number | null => (ch === '.' ? null : (pal[ch] ?? null))))
+  return pixelCells(art)
+}
+export const miniCells = (step: boolean): string => packCells(miniRows(step))
+
+// The crab in one text line, for the desktop, where a pixel row is a whole line of text: braille characters, each a
+// 2 x 4 grid of dots, so five of them hold the 10 x 4 crab (eye gaps, side arms, body, four legs). One line tall, the
+// height of the text beside it, so it cannot be clipped.
+const MINI_DOTS_A = [".##.##.##.", "##########", ".########.", ".#.#..#.#."]
+const MINI_DOTS_B = [".##.##.##.", "##########", ".########.", "#.#....#.#"]
+const DOT_BITS = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]]
+export function miniLine(step: boolean): Cell[] {
+  const art = step ? MINI_DOTS_B : MINI_DOTS_A
+  return Array.from({ length: 5 }, (_, c): Cell => {
+    let mask = 0
+    art.forEach((row, y) => [0, 1].forEach(dx => { if (row[c * 2 + dx] === "#") mask |= DOT_BITS[y]?.[dx] ?? 0 }))
+    return [String.fromCodePoint(0x2800 + mask), 0xe07a5f]
+  })
+}
+
+function pixelCells(px: (number | null)[][]): Cell[][] {
   const rows: Cell[][] = []
   for (let y = 0; y + 1 < px.length; y += 2) {
     const top = px[y] ?? []
@@ -87,47 +119,102 @@ export function spriteCells(role: Role, mode: Mode, frame: number): string {
       }),
     )
   }
-  return packCells(rows)
+  return rows
 }
 
 export type Tone = 'run' | 'done' | 'fail'
 
-// Dither ramp: sparse at the left, dense at the leading edge, like the design's fading dot field
-const RAMP = ['⡀', '⡄', '⡆', '⡇', '⣿']
-const TRACK: Cell = ['⠂', ACCENT.track]
+// The bar is one fixed dot-matrix texture, like the reference: a few rows of small square pixels (two per terminal
+// row, as half blocks) lit at random but stable positions. The filled part shows it in the accent, the part still
+// ahead shows the same pattern very dim, so the fill reads as the texture being revealed. Nothing moves.
+const GHOST = ACCENT.track
+export const BAR_ROWS = 2
 
-function lighten(c: number): number {
-  const ch = (s: number) => Math.min(255, (((c >> s) & 0xff) + 255) >> 1) << s
+// A stable 0..1 value for a position and a seed
+function hash(x: number, seed: number): number {
+  let h = Math.imul(x + 1, 0x9e3779b1) ^ Math.imul(seed + 7, 0x85ebca6b)
+  h ^= h >>> 15
+  h = Math.imul(h, 0x2c1b3c6d)
+  h ^= h >>> 12
+  return (h >>> 0) / 4294967296
+}
+
+// The accent scaled toward black
+function shade(c: number, f: number): number {
+  const ch = (s: number) => Math.round(((c >> s) & 0xff) * f) << s
   return ch(16) | ch(8) | ch(0)
 }
 
-// One row of a bar in an accent colour. A known percent fills to it along the ramp; 'run' with
-// none shimmers (a twinkling dithered field with a bright head sweeping through); 'done' and 'fail' are solid.
-export function barCells(width: number, frame: number, tone: Tone, pct: number | null, accent: number): Cell[] {
-  if (tone === 'fail') return Array.from({ length: width }, (): Cell => ['█', ACCENT.fail])
-  if (tone === 'done') return Array.from({ length: width }, (): Cell => ['█', accent])
-  if (pct !== null) {
-    const filled = Math.round((Math.min(100, Math.max(0, pct)) / 100) * width)
-    return Array.from({ length: width }, (_, x): Cell => {
-      if (x >= filled) return TRACK
-      const level = Math.min(RAMP.length - 1, Math.floor(((x + 1) / filled) * RAMP.length))
-      return [RAMP[level] ?? '⣿', accent]
-    })
-  }
-  const head = (frame % (width + 6)) - 3
-  return Array.from({ length: width }, (_, x): Cell => {
-    const d = x - head
-    if (d >= 0 && d < 3) return ['⣿', lighten(accent)]
-    const twinkle = (x * 7 + frame) % 5
-    return [RAMP[twinkle < 2 ? 1 : twinkle < 4 ? 2 : 3] ?? '⡆', accent]
-  })
+// Opacity is eased, never linear, and snapped to a few steps so runs of one colour stay long (the desktop draws a
+// Text per run). The fill is dim at its tail and brightens toward the leading edge on a power curve, each pixel a
+// little different. The track ahead is far dimmer than any filled pixel and fades out on a smoothstep.
+const smooth = (t: number) => t * t * (3 - 2 * t)
+const snap = (f: number) => Math.round(f * 8) / 8
+function fillLevel(x: number, y: number, filled: number): number {
+  const t = (x + 1) / Math.max(1, filled)
+  return Math.min(1, (0.55 + 0.45 * Math.pow(t, 2.4)) * (0.88 + 0.24 * hash(x * 13 + y, 3)))
+}
+function ghostLevel(x: number, filled: number, width: number): number {
+  const u = (x - filled + 1) / Math.max(1, width - filled)
+  return 0.42 - 0.25 * smooth(Math.min(1, Math.max(0, u)))
 }
 
-// A Raster the timer repaints with $.ui.blit: a shimmering bar, or a running crab
-export type Anim =
-  | { key: string; kind: 'bar'; width: number; accent: number }
-  | { key: string; kind: 'sprite'; role: Role }
+// How many of width cells a percent fills
+export function filledOf(width: number, pct: number | null): number {
+  return pct === null ? 0 : Math.round((Math.min(100, Math.max(0, pct)) / 100) * width)
+}
+
+const lit = (x: number, y: number) => hash(x * 41 + y * 17, 11) < 0.42
+
+// A bar as `rows` terminal rows of cells (2 pixels each). The tone only colours the fill (a failed one is red); how
+// much is filled is the value. No reading yet: all ghost. A label becomes the capsule at the edge of the fill.
+export function barRows(width: number, rows: number, tone: Tone, pct: number | null, accent: number, label?: string): Cell[][] {
+  const color = tone === 'fail' ? ACCENT.fail : accent
+  const filled = filledOf(width, pct)
+  const px = Array.from({ length: rows * 2 }, (_, y) =>
+    Array.from({ length: width }, (_, x): number | null => {
+      if (!lit(x, y)) return null
+      return x >= filled ? shade(GHOST, snap(ghostLevel(x, filled, width))) : shade(color, snap(fillLevel(x, y, filled)))
+    }),
+  )
+  const grid = pixelCells(px)
+  return label ? pillRows(grid, label, accent, filled) : grid
+}
+
+// The bar as the reference draws it: one text line tall, with several rows of tiny dots inside it. A braille character
+// is a 2 x 4 grid of dots, so a single line holds a 4-row dot matrix. Each column has a fixed random subset lit (about
+// half, never none and never all), the same on every bar. The fill is that texture in the accent with the eased
+// shades, the track ahead the same texture very dim.
+function dotsAt(x: number, last = -1): string {
+  let mask = 0
+  for (let bit = 0; bit < 8; bit++) if (hash(x * 8 + bit, 11) < 0.5) mask |= 1 << bit
+  if (mask === 0) mask = 0x01
+  if (mask === 0xff) mask = 0x7f
+  // The end cells carry their whole outer column of dots, so the bar's border touches the dots instead of a gap
+  if (x === 0) mask |= 0x47
+  if (x === last) mask |= 0xb8
+  return String.fromCodePoint(0x2800 + mask)
+}
+
+export function barLine(width: number, tone: Tone, pct: number | null, accent: number): Cell[] {
+  const color = tone === 'fail' ? ACCENT.fail : accent
+  const filled = filledOf(width, pct)
+  return Array.from({ length: width }, (_, x): Cell => [dotsAt(x, width - 1), x >= filled ? shade(GHOST, snap(ghostLevel(x, filled, width))) : shade(color, snap(fillLevel(x, 0, filled)))])
+}
+
+// The "Tasks 2/4" capsule: dark text on the accent, full height, riding the edge of the fill and held inside the bar
+export function pillRows(grid: Cell[][], text: string, accent: number, at: number): Cell[][] {
+  const label = ` ${text} `
+  const width = grid[0]?.length ?? 0
+  if (label.length + 2 > width) return grid
+  const start = Math.min(Math.max(0, at), width - label.length)
+  const mid = Math.floor(grid.length / 2)
+  return grid.map((cells, r) => cells.map((c, i): Cell => (i >= start && i < start + label.length ? [r === mid ? (label[i - start] ?? ' ') : ' ', 0x14121a, accent] : c)))
+}
+
+// A Raster the timer repaints with $.ui.blit: a running crab (bars are static and never repainted)
+export type Anim = { key: string; kind: 'sprite'; role: Role } | { key: string; kind: 'mini' }
 
 export function animCells(a: Anim, frame: number): string {
-  return a.kind === 'sprite' ? spriteCells(a.role, 'run', frame) : packCells([barCells(a.width, frame, 'run', null, a.accent)])
+  return a.kind === 'sprite' ? spriteCells(a.role, 'run', frame) : miniCells(Math.floor(frame / 4) % 2 === 1)
 }

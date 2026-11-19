@@ -3,6 +3,8 @@
 export function fmtTokens(n: number | null | undefined): string {
   if (n === null || n === undefined) return '—'
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  // One decimal under 10k so an output of 1,200 tokens does not read as 1k; whole thousands stay whole (3k)
+  if (n >= 1000 && n < 10_000) return `${Number((n / 1000).toFixed(1))}k`
   if (n >= 1000) return `${Math.round(n / 1000)}k`
   return String(n)
 }

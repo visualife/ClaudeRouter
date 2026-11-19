@@ -2,6 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { directiveOf, guard, type GuardInput } from '../hooks/guard'
 import { applyArgs, DEFAULT_OPTIONS } from '../hooks/options'
+import { isPlanner } from '../hooks/route'
 
 const BASE: GuardInput = {
   pick: { model: 'opus', effort: 'xhigh', conf: 0.9 },
@@ -43,6 +44,15 @@ test('a big context downgrades, a huge one goes to low', () => {
   expect(guard({ ...BASE, contextTokens: 255_000, ctxCap: 0 }).model).toBe('opus')
 })
 
+test('past 100k tokens the main thread does not move to Haiku', () => {
+  const light: GuardInput = { ...BASE, pick: { model: 'haiku', effort: 'low', conf: 0.9 } }
+  expect(guard({ ...light, contextTokens: 80_000 })).toMatchObject({ model: 'haiku', effort: 'low' })
+  expect(guard({ ...light, contextTokens: 120_000 })).toMatchObject({ model: 'sonnet', effort: 'low', limits: ['haiku>100k'] })
+  // a subagent has a small context of its own, and an unknown size changes nothing
+  expect(guard({ ...light, isSub: true, contextTokens: 120_000 }).model).toBe('haiku')
+  expect(guard({ ...light, contextTokens: null }).model).toBe('haiku')
+})
+
 test('the turn budget downgrades, and twice the budget goes to low', () => {
   expect(guard({ ...BASE, turnCost: 3.5 })).toMatchObject({ model: 'sonnet', effort: 'medium' })
   expect(guard({ ...BASE, turnCost: 6.5 })).toMatchObject({ model: 'sonnet', effort: 'low' })
@@ -61,7 +71,7 @@ test('a prompt prefix pins one turn', () => {
   expect(directiveOf('use @sonnet here')).toBe(null)
 })
 
-test('/clauderouter pin, cap, budget and ctx', () => {
+test('/cr-pin, cap, budget and ctx', () => {
   expect(applyArgs('pin sonnet med', DEFAULT_OPTIONS, 0).next).toMatchObject({ pin: 'sonnet', pinEffort: 'medium' })
   expect(applyArgs('pin auto', { ...DEFAULT_OPTIONS, pin: 'opus' }, 0).next).toMatchObject({ pin: null })
   expect(applyArgs('pin gpt', DEFAULT_OPTIONS, 0).next).toBe(null)
@@ -70,4 +80,15 @@ test('/clauderouter pin, cap, budget and ctx', () => {
   expect(applyArgs('budget off', DEFAULT_OPTIONS, 0).next?.budget).toBe(0)
   expect(applyArgs('ctx 200k', DEFAULT_OPTIONS, 0).next?.ctxCap).toBe(200_000)
   expect(applyArgs('ctx lots', DEFAULT_OPTIONS, 0).next).toBe(null)
+})
+
+test('a custom planner or architect subagent may use Opus; others may not', async () => {
+  expect(isPlanner('Plan')).toBe(true)
+  expect(isPlanner('planner')).toBe(true)
+  expect(isPlanner('agent-ClaudeRouter:planner')).toBe(true)
+  expect(isPlanner('architect')).toBe(true)
+  expect(isPlanner('implementer')).toBe(false)
+  expect(isPlanner('planner-helper')).toBe(false)
+  expect(guard({ ...BASE, isSub: true, isPlan: true })).toMatchObject({ model: 'opus' })
+  expect(guard({ ...BASE, isSub: true, isPlan: false })).toMatchObject({ model: 'sonnet' })
 })

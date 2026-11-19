@@ -3,11 +3,11 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { askJev } from '../hooks/jev'
 import { applyArgs, DEFAULT_OPTIONS } from '../hooks/options'
-import { pickRoute, roleOf } from '../hooks/route'
+import { carriesOn, pickRoute, roleOf } from '../hooks/route'
 
 const PLUGIN = 'agent-ClaudeRouter'
 const SCROLL = { offset: 0, bodyRows: 20 }
-const BAND = { hasSurvey: false, isWorking: true, maxRows: 30, bodyColumns: 100, scroll: SCROLL, view: {} }
+const BAND = { hasSurvey: false, isCollapsed: false, isWorking: true, maxRows: 30, bodyColumns: 100, scroll: SCROLL, view: {} }
 const PANE = { title: 'ClaudeRouter', isFocused: false, bodyColumns: 100, placement: 'inline' as const, scroll: SCROLL, view: {} }
 const USAGE = {
   startedAt: 0,
@@ -110,19 +110,36 @@ for (const surface of ['terminal', 'desktop'] as const) {
     })
 
     const band = await $.ui.mount({ plugin: PLUGIN, surface, component: 'AbovePrompt', props: BAND })
+    // The band above the prompt is full by default: every row of info is back
     expect(await band.find({ text: /ClaudeRouter/ })).toBeDefined()
     expect(await band.find({ text: /Model route/ })).toBeDefined()
     expect(await band.find({ text: /0\/1 agents/ })).toBeDefined()
     expect(await band.find({ text: /Map the routes/ })).toBeDefined()
+    expect(await band.find({ text: /Skills/ })).toBeDefined()
     expect(await band.find({ text: /Weekly/ })).toBeDefined()
-    // Raster is the terminal's alone: the desktop draws its bars as Text
-    expect((await band.findAll({ type: 'Raster' })).length > 0).toBe(surface === 'terminal')
+    expect(await band.find({ text: /Keep warm/ })).toBeDefined()
     await band.unmount()
+
+    // `band route`: only the task bar and the model route stay above the prompt
+    await $.command.run({ command: 'cr-band', args: 'route', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+    const slim = await $.ui.mount({ plugin: PLUGIN, surface, component: 'AbovePrompt', props: BAND })
+    expect(await slim.find({ text: /Model route/ })).toBeDefined()
+    expect(await slim.find({ text: /×1/ })).toBeDefined()
+    // The pill is text on the desktop and cells inside the Raster on the terminal
+    if (surface === 'desktop') expect(await slim.find({ text: /Tasks 0\/1/ })).toBeDefined()
+    else expect((await slim.findAll({ type: 'Raster' })).length).toBeGreaterThan(0)
+    expect(await slim.find({ text: /Weekly/ })).toBeUndefined()
+    await slim.unmount()
 
     const pane = await $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', requestId: PLUGIN, props: PANE })
     expect(await pane.find({ text: /Running · 2/ })).toBeDefined()
     expect(await pane.find({ text: /Finished · 0/ })).toBeDefined()
     expect(await pane.find({ text: /Cost/ })).toBeDefined()
+    expect(await pane.find({ text: /Map the routes/ })).toBeDefined()
+    expect(await pane.find({ text: /Weekly/ })).toBeDefined()
+    expect(await pane.find({ text: /Skills/ })).toBeDefined()
+    // Raster is the terminal's alone: the desktop draws its bars as Text
+    expect((await pane.findAll({ type: 'Raster' })).length > 0).toBe(surface === 'terminal')
     await pane.unmount()
   })
 }
@@ -136,15 +153,15 @@ test('while a turn runs the terminal repaints its shimmering bars with $.ui.blit
   })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.turn.start({ turnId: 't1', text: 'plan the architecture' })
-  const band = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'AbovePrompt', requestId: 'band', props: BAND })
+  const band = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', requestId: PLUGIN, props: PANE })
 
   await clock.advance(400)
   const keys = new Set(blits.map(b => b.key))
-  expect(keys.has('task-t1')).toBe(true)
-  expect(keys.has('crab-router')).toBe(true)
-  // A bar of 30 cells is 30 triplets of 4 bytes: 360 bytes, 480 base64 characters
-  expect(blits.find(b => b.key === 'task-t1')?.cells.length).toBe(480)
-  expect(blits.every(b => b.requestId === 'band')).toBe(true)
+  // Only the crabs move; bars are static and show the real value, so none is repainted
+  expect(keys.has('crab-t1')).toBe(true)
+  expect(keys.has('task-crab')).toBe(true)
+  expect([...keys].some(k => k.startsWith('row-') || k.startsWith('taskbar-') || k.startsWith('task-t'))).toBe(false)
+  expect(blits.every(b => b.requestId === PLUGIN)).toBe(true)
 
   // Nothing is repainted once the turn is over
   await $.turn.complete({ turnId: 't1', reason: 'answer', isAborted: false, durationMs: 300, answer: '' })
@@ -155,9 +172,10 @@ test('while a turn runs the terminal repaints its shimmering bars with $.ui.blit
 })
 
 test('hysteresis keeps the current model on a tie, but not on a clear win', () => {
-  // "why list": haiku and opus tie, so sonnet by default — unless a tied model is already running
-  expect(pickRoute({ text: 'why list', tools: [] }).model).toBe('sonnet')
-  expect(pickRoute({ text: 'why list', tools: [], current: 'opus' }).model).toBe('opus')
+  // "debug list": haiku and opus tie, so sonnet by default — unless a tied model is already running.
+  // (Until 0.4.4 the probe was "why list"; "why" alone now counts for half, so it no longer ties.)
+  expect(pickRoute({ text: 'debug list', tools: [] }).model).toBe('sonnet')
+  expect(pickRoute({ text: 'debug list', tools: [], current: 'opus' }).model).toBe('opus')
   // a clear sonnet win does not hold the old model
   expect(pickRoute({ text: 'fix the login bug in the form', tools: [], current: 'opus' }).model).toBe('sonnet')
 })
@@ -177,12 +195,12 @@ test('Jev failures all return null so the rules take over', async () => {
   expect(await askJev(async () => ({ ok: true, text: 'not json' }), 'k', INPUT)).toBe(null)
 })
 
-test('/clauderouter options: engine and keep-warm', () => {
+test('/cr: options: engine and keep-warm', () => {
   const jev = applyArgs('engine jev', DEFAULT_OPTIONS, 0)
   expect(jev.next?.engine).toBe('jev')
   expect(applyArgs('engine gpt', DEFAULT_OPTIONS, 0).next).toBe(null)
   expect(applyArgs('warm 90m', DEFAULT_OPTIONS, 1000).next?.warmUntil).toBe(1000 + 90 * 60_000)
-  expect(applyArgs('warm 99h', DEFAULT_OPTIONS, 0).next?.warmUntil).toBe(6 * 3_600_000)
+  expect(applyArgs('warm 99h', DEFAULT_OPTIONS, 0).next?.warmUntil).toBe(8 * 3_600_000)
   expect(applyArgs('warm off', { ...DEFAULT_OPTIONS, warmUntil: 5 }, 0).next?.warmUntil).toBe(0)
   expect(applyArgs('warm soon', DEFAULT_OPTIONS, 0).next).toBe(null)
 })
@@ -202,7 +220,7 @@ async function warmWorld($: any, on: On, answers: boolean[]) {
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
   })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await $.command.run({ command: 'clauderouter', args: 'warm 3h', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  await $.command.run({ command: 'cr-warm', args: '3h', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
   await $.turn.start({ turnId: 't1', text: 'list the files' })
   for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-sonnet-5-5', effort: 'low', messageCount: 1 })) { /* drain */ }
   await $.turn.complete({ turnId: 't1', reason: 'answer', isAborted: false, durationMs: 300, answer: '' })
@@ -237,29 +255,175 @@ test('a failed ping closes the keep-warm window', { timeoutMs: 120_000 }, async 
 
 test('keep-warm off sends no ping', { timeoutMs: 120_000 }, async ($, on) => {
   const { clock, forks } = await warmWorld($, on, [])
-  await $.command.run({ command: 'clauderouter', args: 'warm off', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  await $.command.run({ command: 'cr-warm', args: 'off', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
   await idle(clock, 120)
   expect(forks()).toBe(0)
 })
 
 test('Jev reports the tokens of its call for the context bar', async () => {
-  const pick = await askJev(ok({ answers: { route: { choice: 'sonnet', probabilities: { sonnet: 0.7 } } }, usage: { input_tokens: 865, output_tokens: 162 } }), 'k', INPUT)
+  const pick = await askJev(ok({ answers: { route: { choice: 'sonnet', probabilities: { sonnet: 0.7 } } }, usage: { input_tokens: 865, output_tokens: 162, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, model: 'm' } }), 'k', INPUT)
   expect(pick).toMatchObject({ model: 'sonnet', input: 865, output: 162 })
 })
 
 test('with the Jev engine the band lights jev and draws its context bar', async ($, on) => {
   world(on)
   on('env.get', () => ({ value: 'key' }))
-  on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ answers: { route: { choice: 'opus', probabilities: { opus: 0.9 } } }, usage: { input_tokens: 16000, output_tokens: 160 } }) } }))
+  on('http.fetch', () => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ answers: { route: { choice: 'opus', probabilities: { opus: 0.9 } } }, usage: { input_tokens: 16000, output_tokens: 160, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, model: 'm' } }) } }))
   on('turn.step', async function* (_$, e) {
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
   })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  await $.command.run({ command: 'clauderouter', args: 'engine jev', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  await $.command.run({ command: 'cr-engine', args: 'jev', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
   await $.turn.start({ turnId: 't1', text: 'list the files' })
   for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-sonnet-5-5', effort: 'low', messageCount: 1 })) { /* drain */ }
-  const band = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'AbovePrompt', requestId: 'band', props: BAND })
-  expect((await band.find({ type: 'Text', text: /Jev · context/ }))).toBeTruthy()
-  expect((await band.find({ type: 'Text', text: /16k \/ 64k · 25% · 1 calls/ }))).toBeTruthy()
+  const band = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: PLUGIN, props: PANE })
+  expect((await band.find({ type: 'Text', text: /◈ Jev/ }))).toBeTruthy()
+  expect((await band.find({ type: 'Text', text: /16k\/64k · 1 calls/ }))).toBeTruthy()
   await band.unmount()
+})
+
+test('the pane shows the keep-warm clock: off by default, a countdown once a window is open', async ($, on) => {
+  world(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const off = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: PLUGIN, props: PANE })
+  expect(await off.find({ type: 'Text', text: /Keep warm off · \/cr-warm 2h/ })).toBeTruthy()
+  await off.unmount()
+
+  await $.command.run({ command: 'cr-warm', args: '2h', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  const onPane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: PLUGIN, props: PANE })
+  expect(await onPane.find({ type: 'Text', text: /Keep warm on · 1(19|20):\d\d left · ping after your next request/ })).toBeTruthy()
+  await onPane.unmount()
+})
+
+test('the band has a close control: pressing it closes the band, and band full brings it back', async ($, on) => {
+  world(on)
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const band = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'AbovePrompt', props: BAND })
+  expect(await band.find({ type: 'Button', text: /Close ClaudeRouter/ })).toBeDefined()
+  await band.press({ key: 'clauderouter-close' })
+  await band.unmount()
+
+  // closed: the hook draws nothing
+  const closed = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'AbovePrompt', props: BAND })
+  expect(await closed.find({ text: /Model route/ })).toBeUndefined()
+  await closed.unmount()
+
+  await $.command.run({ command: 'cr-band', args: 'full', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  const back = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'AbovePrompt', props: BAND })
+  expect(await back.find({ text: /Model route/ })).toBeDefined()
+  await back.unmount()
+})
+
+test('the Fable bar shows the share of the session tokens that ran on Fable', async ($, on) => {
+  world(on)
+  on('turn.step', async function* (_$, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const empty = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: PLUGIN, props: PANE })
+  expect(await empty.find({ type: 'Text', text: /✧ Fable/ })).toBeTruthy()
+  expect(await empty.find({ type: 'Text', text: /^—$/ })).toBeTruthy()
+  await empty.unmount()
+
+  // one turn on Fable (locked, passed through), one on Sonnet
+  await $.turn.start({ turnId: 't1', text: 'hello' })
+  for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-fable-5-2', effort: 'high', messageCount: 1 })) { /* drain */ }
+  await $.turn.complete({ turnId: 't1', reason: 'answer', isAborted: false, durationMs: 100, answer: '', usage: { input_tokens: 2000, output_tokens: 1000, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, model: 'm' } })
+  await $.turn.start({ turnId: 't2', text: 'write the tests' })
+  for await (const _ of $.turn.step({ turnId: 't2', index: 0, model: 'claude-sonnet-5-5', effort: 'low', messageCount: 1 })) { /* drain */ }
+  await $.turn.complete({ turnId: 't2', reason: 'answer', isAborted: false, durationMs: 100, answer: '', usage: { input_tokens: 800, output_tokens: 200, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, model: 'm' } })
+
+  const pane = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'Pane', requestId: PLUGIN, props: PANE })
+  expect(await pane.find({ type: 'Text', text: /75% of session/ })).toBeTruthy()
+  await pane.unmount()
+})
+
+// 0.4.4
+
+const STEP_DONE = (e: { turnId: string; index: number }) => ({ turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage: null })
+
+test('a short prompt with no signal carries on with the route the last turn ended on', () => {
+  const prev = { model: 'sonnet' as const, effort: 'medium' as const }
+  for (const text of ['yes go ahead', 'oui vas-y', 'continue', 'ok']) {
+    expect(pickRoute({ text, tools: [], current: 'sonnet', prev })).toMatchObject({ model: 'sonnet', effort: 'medium' })
+  }
+  expect(pickRoute({ text: 'yes go ahead', tools: [], prev: { model: 'opus', effort: 'high' } })).toMatchObject({ model: 'opus', effort: 'high' })
+  // no previous turn: the old rule, a short light request
+  expect(pickRoute({ text: 'yes go ahead', tools: [] }).model).toBe('haiku')
+  // a prompt with a signal of its own is scored, whatever came before
+  expect(pickRoute({ text: 'list the files', tools: [], prev }).model).toBe('haiku')
+  expect(pickRoute({ text: 'write a tagline', tools: [], prev }).model).toBe('opus')
+  // Fable is never carried, and a subagent has no previous turn
+  expect(pickRoute({ text: 'yes go ahead', tools: [], prev: { model: 'fable', effort: 'high' } }).model).toBe('haiku')
+  expect(carriesOn({ text: 'continue', tools: [], subagentType: 'general-purpose', prev })).toBe(false)
+})
+
+test('French prompts are scored like English ones', () => {
+  expect(pickRoute({ text: 'corrige le bug du formulaire de contact et ajoute un test', tools: [] })).toMatchObject({ model: 'sonnet', effort: 'medium' })
+  expect(pickRoute({ text: 'pourquoi le build échoue sur Vercel ? regarde les logs et corrige', tools: [] })).toMatchObject({ model: 'sonnet', effort: 'medium' })
+  expect(pickRoute({ text: 'planifie la migration du catalogue vers n8n cloud', tools: [] })).toMatchObject({ model: 'opus', effort: 'xhigh' })
+  expect(pickRoute({ text: 'liste les fichiers du dossier hooks', tools: [] })).toMatchObject({ model: 'haiku', effort: 'low' })
+  // "ou" is "or", not "où"; "resume" and "listener" are English
+  expect(pickRoute({ text: 'ajoute un champ email ou téléphone', tools: [] }).model).toBe('sonnet')
+  expect(pickRoute({ text: 'resume the work on the event listener and add the handler', tools: [] }).model).toBe('sonnet')
+})
+
+test('everyday words alone do not send a prompt to Opus, and Sonnet runs at medium', () => {
+  expect(pickRoute({ text: 'update the design system tokens in the css file', tools: [] })).toMatchObject({ model: 'sonnet', effort: 'medium' })
+  expect(pickRoute({ text: 'design the database schema', tools: [] })).toMatchObject({ model: 'sonnet', effort: 'medium' })
+  // beside a strong signal they count in full
+  expect(pickRoute({ text: 'debug why the refresh token check fails', tools: ['Bash', 'Edit'] }).model).toBe('opus')
+  // a prompt with no keyword at all is not a lookup: medium, not low
+  expect(pickRoute({ text: 'the checkout button does nothing when the cart holds a subscription item', tools: [] })).toMatchObject({ model: 'sonnet', effort: 'medium' })
+})
+
+test('a runner subagent goes to Haiku whatever its brief says', () => {
+  const brief = 'Run tests Run the test suite, the type check and the build, then report the failures'
+  expect(pickRoute({ text: brief, tools: [], subagentType: 'test-runner' })).toMatchObject({ model: 'haiku', effort: 'low' })
+  expect(pickRoute({ text: brief, tools: [], subagentType: 'general-purpose' }).model).toBe('sonnet')
+  // whole name parts only
+  expect(pickRoute({ text: 'write the summary of the docs', tools: [], subagentType: 'information-gatherer' }).model).toBe('sonnet')
+})
+
+test('"yes go ahead" is sent on the model and effort the last turn ended on', async ($, on) => {
+  world(on)
+  const sent: string[] = []
+  on('turn.step', async function* (_$, e) {
+    sent.push(`${e.model}/${e.effort}`)
+    return STEP_DONE(e)
+  })
+  await $.turn.start({ turnId: 't1', text: 'fix the failing test in router.test.ts' })
+  for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-sonnet-5-5', effort: 'low', messageCount: 1 })) { /* drain */ }
+  await $.turn.complete({ turnId: 't1', reason: 'answer', isAborted: false, durationMs: 100, answer: '' })
+  await $.turn.start({ turnId: 't2', text: 'yes go ahead' })
+  for await (const _ of $.turn.step({ turnId: 't2', index: 0, model: 'claude-sonnet-5-5', effort: 'medium', messageCount: 3 })) { /* drain */ }
+  expect(sent).toEqual(['claude-sonnet-5-5/medium', 'claude-sonnet-5-5/medium'])
+})
+
+test('Jev is asked once per turn, not before every request, and not about a prompt that only carries on', async ($, on) => {
+  world(on)
+  let calls = 0
+  on('env.get', () => ({ value: 'key' }))
+  on('http.fetch', () => {
+    calls += 1
+    return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ answers: { route: { choice: 'sonnet', probabilities: { sonnet: 0.9 } } }, usage: { input_tokens: 900, output_tokens: 100, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, model: 'm' } }) } }
+  })
+  on('turn.step', async function* (_$, e) {
+    return STEP_DONE(e)
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'cr-engine', args: 'jev', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
+  await $.turn.start({ turnId: 't1', text: 'fix the login bug' })
+  for (const index of [0, 1, 2]) {
+    for await (const _ of $.turn.step({ turnId: 't1', index, model: 'claude-sonnet-5-5', effort: 'medium', messageCount: 1 + index })) { /* drain */ }
+  }
+  expect(calls).toBe(1)
+  await $.turn.complete({ turnId: 't1', reason: 'answer', isAborted: false, durationMs: 100, answer: '' })
+  await $.turn.start({ turnId: 't2', text: 'write the tests' })
+  for await (const _ of $.turn.step({ turnId: 't2', index: 0, model: 'claude-sonnet-5-5', effort: 'medium', messageCount: 5 })) { /* drain */ }
+  expect(calls).toBe(2)
+  await $.turn.complete({ turnId: 't2', reason: 'answer', isAborted: false, durationMs: 100, answer: '' })
+  await $.turn.start({ turnId: 't3', text: 'continue' })
+  for await (const _ of $.turn.step({ turnId: 't3', index: 0, model: 'claude-sonnet-5-5', effort: 'medium', messageCount: 7 })) { /* drain */ }
+  expect(calls).toBe(2)
 })
