@@ -13,8 +13,8 @@ export const DEFAULT_OPTIONS: Options = {
   // A session on a locked model is left alone: no rerouting, no caps. Fable is locked by default.
   locks: ['fable'],
   band: 'full',
-  // Flagship creative work goes to Opus at xhigh; Fable is opt-in (/cr creative fable)
-  creative: 'opus',
+  // Flagship creative work goes to Fable at high by default; /cr-creative opus sends it to Opus at xhigh instead
+  creative: 'fable',
   creativeCap: 'xhigh',
   // Off: the router behaves as it always did. On: the session is the orchestrator (see Options.orchestrator).
   orchestrator: 'off',
@@ -49,8 +49,8 @@ export const USAGE = [
   '/cr-budget 3        USD one turn may spend before it is downgraded (off = no limit)',
   '/cr-ctx 150k        context size above which requests are downgraded (off = no limit)',
   '/cr-band route      band above the prompt: task bar and model route only (full = every row, off = closed)',
-  '/cr-creative opus   flagship creative work (identity, naming, taglines, art direction) on Opus xhigh (default)',
-  '/cr-creative fable  flagship creative work on Fable high (uses your weekly Fable allowance)',
+  '/cr-creative opus   flagship creative work (identity, naming, taglines, art direction) on Opus xhigh',
+  '/cr-creative fable  flagship creative work on Fable high (default; uses your weekly Fable allowance)',
   '/cr-creative off    route creative prompts like any other',
   '/cr-creative cap high  highest effort creative work may run at (default xhigh)',
   '/cr-orchestrator on     manager only: the session delegates, its file and shell tools are blocked, ~/.claude/orchestrator.md is loaded (/cr-orch is the short form)',

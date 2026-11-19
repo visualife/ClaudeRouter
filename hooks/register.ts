@@ -41,8 +41,8 @@ let turnTools: string[] = []
 // Cost guards: the session cost when this turn began, and a "@model:effort" prompt prefix
 let turnCostStart = 0
 let turnPin: Pin | null = null
-// The locked model id the router itself last sent on the main thread (Fable for flagship creative work, when
-// /cr-creative fable is on). A request arriving on that id is the router's own choice, not the user's,
+// The locked model id the router itself last sent on the main thread (Fable for flagship creative work, by default;
+// /cr-creative opus turns it off). A request arriving on that id is the router's own choice, not the user's,
 // so the lock does not freeze it there.
 let routedLocked: string | null = null
 // When the main thread last sent a request, for keep-warm
