@@ -7,7 +7,7 @@ A Claude Code mod that picks the **model and effort for each request**, and keep
 ## What it does
 
 - **Routes every request** to `haiku`, `sonnet` or `opus`, with a reasoning effort from `low` to `xhigh` and a confidence score. Routing is local keyword, length and tool heuristics: no model is called to decide (Jev, below, is the optional exception). A hysteresis margin stops it flip-flopping between tiers. `max` is never picked: it appears only when an agent file or an Agent call sets it.
-- **Fable is never picked by the rules.** Fable is reached only by your choice (`/cr-pin fable`, a `@fable` prefix) or with `/cr-creative fable`, which sends flagship creative work to Fable `high`. A session on a locked model, Fable by default, is passed through untouched: the router keeps the model and effort it arrived with (see **Model locks**).
+- **Fable is picked by the rules for flagship creative work only.** Flagship creative work (brand identity, naming, taglines, art direction, campaign concepts) goes to Fable `high` by default; `/cr-creative opus` sends it to Opus `xhigh` instead. Nothing else is routed to Fable; you can still choose it yourself (`/cr-pin fable`, a `@fable` prefix). A session on a locked model, Fable by default, is passed through untouched: the router keeps the model and effort it arrived with (see **Model locks**).
 - **Live band above the prompt**: the route with the current model shown as a `[sonnet]` chip, plain grey text, then the running and finished agents, skills used, MCP calls, plugins seen, context, 5h / 7d usage and the keep-warm clock. `/cr-band route` shrinks it to the task bar and the route.
 - **`/cr` pane**: cards for cost, tokens, time, Deck cost, skills, MCP, plugins, context, usage and keep-warm, then the running and finished rows. Each sub-agent row shows its type and task, `model · effort · state`, who set them (`set by`), its tokens in, cached and out, and its cost. Each row bar is the share of its prompt's tokens spent by sub-agents (a prompt row) or the agent's share of its prompt (an agent row), capped at 20 columns.
 - **Jev as the router (optional)**: let [Jev](https://typesafe.ai) (TypeSafe System One) pick the tier instead of the keyword rules. Falls back to the rules on any error or timeout.
@@ -90,7 +90,7 @@ Copywriting, art direction and brand work are judged on taste and voice, not spe
 
 - Volume turns craft into bulk. It turns flagship into craft, not bulk: a translated manifesto still needs care.
 - Creative turns use `creativeCap` (default `xhigh`) as their ceiling instead of `cap`. `/cr-creative cap high` lowers it.
-- Fable is opt-in: `/cr-creative fable` sends flagship work to Fable 5.2 at `high` (Anthropic's recommended default for it), and craft and bulk stay where they are. Each flagship turn then draws on your weekly Fable allowance. A session the router moved to Fable is not frozen there by the Fable lock: the lock only holds a model *you* chose.
+- Fable is the default for flagship work: it goes to Fable 5.2 at `high` (Anthropic's recommended default for it); `/cr-creative opus` sends it to Opus `xhigh` instead. Craft and bulk stay where they are. Each flagship turn then draws on your weekly Fable allowance. A session the router moved to Fable is not frozen there by the Fable lock: the lock only holds a model *you* chose.
 - `/cr-creative off` routes creative prompts like any other.
 - Bare "copy", "design", "script", "naming" and "positionnement" are not creative signals on purpose: "copy the file", "naming conventions", "a bash script" and CSS positioning stay code.
 - When the guard kept the model for a creative turn, the band's second line shows `guard flagship: strong` (or `craft`, `bulk`). The keyword that made the turn creative (`kw:creative`, `kw:copy`) is no longer echoed on the band.
@@ -122,8 +122,8 @@ The full dashboard is the `/cr` pane: cost, tokens and time, skills, MCP, plugin
 |---|---|---|---|
 | `haiku` | `claude-haiku-5-5` | yes | Light reads, searches, subagents of type Explore. |
 | `sonnet` | `claude-sonnet-5-5` | yes | Default for building and executing. |
-| `opus` | `claude-opus-5-5` | yes | Planning, flagship creative work (`xhigh`) and craft copy (`high`). |
-| `fable` | `claude-fable-5-2` | only with `creative fable` | Locked by default. A session already on Fable 5.1 or 5 keeps its own id; `claude-fable-5-2` is only used when you pin or switch into Fable. |
+| `opus` | `claude-opus-5-5` | yes | Planning, craft copy (`high`) and, with `creative opus`, flagship creative work (`xhigh`). |
+| `fable` | `claude-fable-5-2` | flagship creative work (default) | Locked by default. A session already on Fable 5.1 or 5 keeps its own id; `claude-fable-5-2` is only used when you pin or switch into Fable. |
 
 **Fable and your plan** (per [Anthropic's help page](https://support.claude.com/en/articles/15424964-claude-fable-models-on-your-plan), checked 2026-11-09): Fable 5, 5.1 and 5.2 are on all paid plans. Max, Ultra and premium Team/Enterprise seats include Fable in the plan, up to 50% of the weekly limit; Pro and standard seats run Fable on usage credits. The page gives no end date for the plan inclusion; the one dated promotion (Fable 5 only) ended 2026-07-19. Claude Code minimums: Fable 5.2 needs 2.1.321, 5.1 needs 2.1.255. That is why Fable stays locked and is never picked automatically: it eats the weekly limit faster than the other models.
 
@@ -185,7 +185,7 @@ Set them from the prompt; they persist across reloads.
 | `/cr-budget <usd\|off>` | Per-turn spend limit. |
 | `/cr-ctx <150k\|off>` | Context size limit. |
 | `/cr-band <full\|route\|off>` | Band above the prompt: every row, only the task bar and the model route, or closed. The band also has a close control (✕ in the terminal, the native close mark on the desktop) that sets `off`; `band full` brings it back. The pane is separate and stays open. |
-| `/cr-creative <opus\|fable\|off>` | Where flagship creative work goes: Opus `xhigh` (default), Fable `high`, or no creative routing. |
+| `/cr-creative <opus\|fable\|off>` | Where flagship creative work goes: Fable `high` (default), Opus `xhigh`, or no creative routing. |
 | `/cr-creative cap <effort>` | Highest effort creative work may run at (default `xhigh`). |
 | `/cr-orchestrator <on\|off>` (short: `/cr-orch`) | Orchestrator mode: the session model is never rerouted, sub-agents keep the model and effort their file or call set. Off by default. |
 | `/cr-orchestrator hands on` | Lifts the manager guard (emergency), keeps the rules loaded, band shows amber. |

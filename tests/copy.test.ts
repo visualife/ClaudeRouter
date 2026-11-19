@@ -122,13 +122,22 @@ test('the guard keeps creative work strong, with its own effort ceiling', () => 
 })
 
 test('/cr-creative sets the flagship model and the creative ceiling', () => {
-  expect(DEFAULT_OPTIONS).toMatchObject({ creative: 'opus', creativeCap: 'xhigh' })
+  expect(DEFAULT_OPTIONS).toMatchObject({ creative: 'fable', creativeCap: 'xhigh' })
   // options saved by 0.4.2 get the creative defaults
-  expect(normalize({ engine: 'rules' })).toMatchObject({ creative: 'opus', creativeCap: 'xhigh' })
-  expect(applyArgs('creative fable', DEFAULT_OPTIONS, 0).next?.creative).toBe('fable')
+  expect(normalize({ engine: 'rules' })).toMatchObject({ creative: 'fable', creativeCap: 'xhigh' })
+  expect(applyArgs('creative opus', DEFAULT_OPTIONS, 0).next?.creative).toBe('opus')
   expect(applyArgs('creative off', DEFAULT_OPTIONS, 0).next?.creative).toBe('off')
   expect(applyArgs('creative cap high', DEFAULT_OPTIONS, 0).next?.creativeCap).toBe('high')
   expect(applyArgs('creative cap max', DEFAULT_OPTIONS, 0).next).toBe(null)
   expect(applyArgs('creative gpt', DEFAULT_OPTIONS, 0).next).toBe(null)
-  expect(describeOptions(DEFAULT_OPTIONS, 0)).toContain('creative: opus (cap xhigh)')
+  expect(describeOptions(DEFAULT_OPTIONS, 0)).toContain('creative: fable (cap xhigh)')
+})
+
+test('a flagship creative prompt with the default options routes to Fable', () => {
+  const text = 'write a tagline for the new tea brand'
+  expect(pickRoute({ text, tools: [], creative: DEFAULT_OPTIONS.creative })).toMatchObject({ model: 'fable', effort: 'high' })
+  expect(creativeFloor({ model: 'haiku', effort: 'low', conf: 0.7 }, { text, tools: [], creative: DEFAULT_OPTIONS.creative })).toMatchObject({ model: 'fable', effort: 'high' })
+  // the opposite setting keeps it on Opus, and craft copy never reaches Fable
+  expect(pickRoute({ text, tools: [], creative: applyArgs('creative opus', DEFAULT_OPTIONS, 0).next?.creative })).toMatchObject({ model: 'opus', effort: 'xhigh' })
+  expect(pickRoute({ text: 'rédige la fiche produit du baume', tools: [], creative: DEFAULT_OPTIONS.creative }).model).toBe('opus')
 })
