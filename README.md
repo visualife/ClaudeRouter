@@ -19,6 +19,8 @@ A Claude Code mod that picks the **model and effort for each request**, and keep
 
 ## Orchestrator mode (v0.5.0)
 
+![ClaudeRouter band in orchestrator mode: the route, the task and its sub-agent, set by frontmatter](docs/band-orchestrator.png)
+
 For a session where one strong model (Fable, say) splits the work and hands each part to a sub-agent with its own model and effort. Off by default: with `/cr-orchestrator off` the main model is routed exactly as before.
 
 **Who chooses a sub-agent's model and effort.** The router chooses only what nobody else did. In order: an environment override, the Agent call's own `model` / `effort` (the orchestrator), the agent file's `model` / `effort` frontmatter, then the router. A choice made upstream is passed through unchanged, on the spawn and on every request after it. Each part is decided separately: a file that sets the model and no effort gets the router's effort for that model (held to medium unless the agent plans). An agent whose file the router cannot read, and a fork, are left to the engine rather than routed over a choice it cannot see. The router finds agent files in `.claude/agents/` (the project and its parents), `~/.claude/agents/` and a plugin's `agents/`.
