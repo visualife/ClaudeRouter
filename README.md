@@ -6,12 +6,16 @@ A Claude Code mod that picks the **model and effort for each request**, and keep
 
 ## What it does
 
-- **Routes every request** to `haiku`, `sonnet` or `opus` with a reasoning effort (`low` → `xhigh`) and a confidence score. Routing is local keyword/length/tool heuristics: no model is called to decide. A small hysteresis stops it flip-flopping between tiers.
-- **Live band above the prompt**: current route, running agents, skills used, MCP calls, plugins seen, context window, and 5h / 7d plan usage.
-- **`/cr` pane**: cost, tokens and elapsed time cards, plus the running and finished subagents with the model and effort each one got.
+- **Routes every request** to `haiku`, `sonnet` or `opus`, with a reasoning effort from `low` to `xhigh` and a confidence score. Routing is local keyword, length and tool heuristics: no model is called to decide (Jev, below, is the optional exception). A hysteresis margin stops it flip-flopping between tiers. `max` is never picked: it appears only when an agent file or an Agent call sets it.
+- **Fable is never picked by the rules.** Fable is reached only by your choice (`/cr-pin fable`, a `@fable` prefix) or with `/cr-creative fable`, which sends flagship creative work to Fable `high`. A session on a locked model, Fable by default, is passed through untouched: the router keeps the model and effort it arrived with (see **Model locks**).
+- **Live band above the prompt**: the route with the current model shown as a `[sonnet]` chip, plain grey text, then the running and finished agents, skills used, MCP calls, plugins seen, context, 5h / 7d usage and the keep-warm clock. `/cr-band route` shrinks it to the task bar and the route.
+- **`/cr` pane**: cards for cost, tokens, time, Deck cost, skills, MCP, plugins, context, usage and keep-warm, then the running and finished rows. Each sub-agent row shows its type and task, `model · effort · state`, who set them (`set by`), its tokens in, cached and out, and its cost. Each row bar is the share of its prompt's tokens spent by sub-agents (a prompt row) or the agent's share of its prompt (an agent row), capped at 20 columns.
 - **Jev as the router (optional)**: let [Jev](https://typesafe.ai) (TypeSafe System One) pick the tier instead of the keyword rules. Falls back to the rules on any error or timeout.
-- **Keep the cache warm (optional)**: pings the prompt cache every 50 minutes while you are idle (windows up to 8 hours: `/cr-warm 8h`, short `/cr-kw`), so a break does not cost a full re-write.
-- **Pixel mascots** per subagent role: scout (Explore), planner (Plan), researcher, builder.
+- **Keep the cache warm (optional)**: pings the prompt cache every 50 minutes while you are idle, for up to 8 hours (`/cr-warm 8h`, short `/cr-kw`), so a break does not cost a full re-write.
+- **Orchestrator mode (v0.5.0)**: one strong session manages and delegates, sub-agents keep the model and effort their file or call set, and a manager guard refuses the main thread's file reads and writes and shell commands. See [Orchestrator mode](#orchestrator-mode-v050).
+- **Session log, `/cr-log`, `/cr-review`**: each session writes a `.jsonl` and a `.md` log under `~/.claude/cr-logs/<project>/`; `/cr-log` shows the table, `/cr-review [n]` has one Sonnet agent propose at most five edits from the last n logs. See [Manager mode and the session log](#manager-mode-and-the-session-log-v05).
+- **Costs and prices**: `/cr-deck` prints the deck with exact figures, `/cr-prices` reloads the price table (`prices.json`, shipped empty, overridden by `~/.claude/clauderouter-prices.json`). A row with no price shows "prices missing"; nothing is estimated.
+- **Pixel mascots** per subagent role: scout (Explore), planner (Plan), researcher and builder.
 
 ## Orchestrator mode (v0.5.0)
 
