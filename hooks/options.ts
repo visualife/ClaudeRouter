@@ -16,9 +16,16 @@ export const DEFAULT_OPTIONS: Options = {
   // Flagship creative work goes to Fable at high by default; /cr-creative opus sends it to Opus at xhigh instead
   creative: 'fable',
   creativeCap: 'xhigh',
-  // Off: the router behaves as it always did. On: the session is the orchestrator (see Options.orchestrator).
-  orchestrator: 'off',
+  // On by default: the session is the orchestrator (see Options.orchestrator); session.start loads the rules and falls
+  // back to off when ~/.claude/orchestrator.md is missing. /cr-orchestrator off: the router behaves as it always did.
+  orchestrator: 'on',
   rules: null,
+  // router: the router picks model and effort. claude: Claude Code mode, pass-through, nothing is changed.
+  mode: 'router',
+  // advise: detect "ultracode" in a prompt, route and log Workflow agents, warn past ultraMax. The mod never turns ultracode on.
+  ultracode: 'advise',
+  ultraMax: 5,
+  fableFallback: 'on',
 }
 export const ALL_MODELS: Model[] = ['haiku', 'sonnet', 'opus', 'fable']
 const isModel = (s: string): s is Model => (ALL_MODELS as string[]).includes(s)
@@ -53,15 +60,22 @@ export const USAGE = [
   '/cr-creative fable  flagship creative work on Fable high (default; uses your weekly Fable allowance)',
   '/cr-creative off    route creative prompts like any other',
   '/cr-creative cap high  highest effort creative work may run at (default xhigh)',
-  '/cr-orchestrator on     manager only: the session delegates, its file and shell tools are blocked, ~/.claude/orchestrator.md is loaded (/cr-orch is the short form)',
+  '/cr-orchestrator on     (default) manager only: the session delegates, its file and shell tools are blocked, ~/.claude/orchestrator.md is loaded (/cr-orch is the short form)',
   '/cr-orchestrator hands on   emergency: the block is lifted, the rules stay loaded',
-  '/cr-orchestrator off    back to routing the main model, no block (default)',
+  '/cr-orchestrator off    back to routing the main model, no block',
+  '/cr-mode claude     Claude Code mode: routing off, Claude Code keeps its own model and effort (tracking, logs and costs go on)',
+  '/cr-mode router     routing on again (default)',
+  '/cr-ultracode advise    detect ultracode, route and log Workflow agents, warn when a task launches too many (default; the mod never turns it on)',
+  '/cr-ultracode off       no ultracode chip or warning',
+  '/cr-ultracode max=5     Workflow agents one task may launch before the band warns',
+  '/cr-fable reset     Fable is back now: clears the "Fable out of usage" fallback',
+  '/cr-fable off       never fall back to Opus when Fable looks out of usage (on = default)',
   '/cr-status          show the current options',
   'Prompt prefix: "@sonnet:med ..." pins that one turn.',
 ].join('\n')
 
 // One slash command per option: /cr-warm 2h runs applyArgs('warm 2h'). The bare /cr opens the pane.
-export const OPTION_COMMANDS = ['engine', 'warm', 'pin', 'lock', 'unlock', 'cap', 'budget', 'ctx', 'band', 'creative', 'orchestrator', 'status'] as const
+export const OPTION_COMMANDS = ['engine', 'warm', 'pin', 'lock', 'unlock', 'cap', 'budget', 'ctx', 'band', 'creative', 'orchestrator', 'mode', 'ultracode', 'fable', 'status'] as const
 // Short names: /cr-kw is /cr-warm, /cr-orch is /cr-orchestrator
 export const OPTION_ALIASES: Record<string, (typeof OPTION_COMMANDS)[number]> = { kw: 'warm', orch: 'orchestrator' }
 
@@ -99,7 +113,7 @@ export function describe(o: Options, now: number): string {
   const pin = o.pin ? `${o.pin}${o.pinEffort ? `/${o.pinEffort}` : ''}` : 'auto'
   const budget = o.budget > 0 ? `$${o.budget}/turn` : 'off'
   const ctx = o.ctxCap > 0 ? `${Math.round(o.ctxCap / 1000)}k` : 'off'
-  return `engine: ${o.engine} · model: ${pin} · locked: ${o.locks.length > 0 ? o.locks.join(', ') : 'none'} · max effort: ${o.maxEffort} · creative: ${o.creative}${o.creative === 'off' ? '' : ` (cap ${o.creativeCap})`} · budget: ${budget} · ctx cap: ${ctx} · orchestrator: ${modeText(o)} · keep-warm: ${warm}`
+  return `engine: ${o.engine} · model: ${pin} · locked: ${o.locks.length > 0 ? o.locks.join(', ') : 'none'} · max effort: ${o.maxEffort} · creative: ${o.creative}${o.creative === 'off' ? '' : ` (cap ${o.creativeCap})`} · budget: ${budget} · ctx cap: ${ctx} · mode: ${o.mode === 'claude' ? 'claude code (routing off)' : 'router'} · ultracode: ${o.ultracode}${o.ultracode === 'advise' ? ` (warn above ${o.ultraMax} workflow agents)` : ''} · fable fallback: ${o.fableFallback} · orchestrator: ${modeText(o)} · keep-warm: ${warm}`
 }
 
 // Applies one /cr argument string. next is null when the args are not an option change.
@@ -137,7 +151,10 @@ export function applyArgs(args: string, o: Options, now: number): { next: Option
     }
     // Kept from 0.4.1: "fable lock" and "fable auto"
     case 'fable': {
-      if (arg !== 'lock' && arg !== 'auto') return { next: null, text: `fable takes lock or auto\n${USAGE}` }
+      const a = arg.trim().toLowerCase()
+      if (a === 'reset') return { next: o, text: 'fable fallback cleared: Fable requests go to Fable again' }
+      if (a === 'on' || a === 'off') return { next: { ...o, fableFallback: a }, text: a === 'on' ? 'fable fallback: on · Fable out of usage goes to Opus until the reset' : 'fable fallback: off · Fable is never swapped for Opus (a current fallback is cleared)' }
+      if (arg !== 'lock' && arg !== 'auto') return { next: null, text: `fable takes reset, on, off, lock or auto\n${USAGE}` }
       return applyArgs(`${arg === 'lock' ? 'lock' : 'unlock'} fable`, o, now)
     }
     case 'cap': {
@@ -178,6 +195,28 @@ export function applyArgs(args: string, o: Options, now: number): { next: Option
       // "on" and "hands" are confirmed by the hooks once the rules file is found; this is the pure part
       const said = mode === 'off' ? 'orchestrator: off' : `orchestrator: ${mode === 'on' ? 'on · manager only' : 'hands on · guard off'}`
       return { next: { ...o, orchestrator: mode, ...(mode === 'off' ? { rules: null } : {}) }, text: said }
+    }
+    case 'mode': {
+      const mode = arg.trim().toLowerCase()
+      if (mode !== 'router' && mode !== 'claude') return { next: null, text: `mode takes router or claude\n${USAGE}` }
+      return { next: { ...o, mode }, text: mode === 'claude' ? 'mode: claude code · routing off, Claude Code keeps its own model and effort' : 'mode: router · routing on' }
+    }
+    case 'ultracode': {
+      const words = arg.trim().toLowerCase().split(/\s+/).filter(Boolean)
+      let next: Options = o
+      const said: string[] = []
+      for (const w of words) {
+        const m = /^max=(\d+)$/.exec(w)
+        if (w === 'off' || w === 'advise') {
+          next = { ...next, ultracode: w }
+          said.push(w === 'off' ? 'ultracode: off' : 'ultracode: advise · detects, routes, logs and warns; only you turn ultracode on')
+        } else if (m && Number(m[1]) > 0) {
+          next = { ...next, ultraMax: Number(m[1]) }
+          said.push(`warn above ${m[1]} workflow agents per task`)
+        } else return { next: null, text: `ultracode takes off, advise or max=N\n${USAGE}` }
+      }
+      if (said.length === 0) return { next: null, text: `ultracode takes off, advise or max=N\n${USAGE}` }
+      return { next, text: said.join(' · ') }
     }
     case 'status':
       return { next: null, text: describe(o, now) }

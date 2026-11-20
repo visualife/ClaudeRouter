@@ -94,10 +94,10 @@ test('a simulated session writes the expected lines, in order, from named fields
   const lines = fromJsonl(text)
   const kinds = lines.map(l => l.t)
   expect(kinds).toEqual(['session', 'task', 'block', 'block', 'agent', 'skill', 'skill', 'mcp', 'end', 'followup', 'agent', 'end', 'verdict', 'main', 'session'])
-  expect(lines[0]).toMatchObject({ phase: 'start', project: 'site', mode: 'off' })
+  expect(lines[0]).toMatchObject({ phase: 'start', project: 'site', mode: 'on' })
   expect(lines[1]).toMatchObject({ n: 1, mode: 'on' })
   expect(String(lines[1]?.text)).toHaveLength(120)
-  expect(lines[2]).toMatchObject({ tool: 'Bash', target: '', agent: 'test-runner' })
+  expect(lines[2]).toMatchObject({ tool: 'Bash', target: 'curl', agent: 'test-runner' })
   expect(lines[3]).toMatchObject({ tool: 'Edit', target: 'C:/work/site/src/footer.ts', agent: 'coder' })
   expect(lines[4]).toMatchObject({ agent: 'coder', by: { model: 'frontmatter', effort: 'frontmatter' }, brief: 'Change the footer link in src/footer.ts', skills: ['impeccable', 'seo'] })
   // a skill the brief named, and one the agent chose

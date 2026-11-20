@@ -1,6 +1,6 @@
 import type { RenderElement } from 'claude-code'
 import type { Agent, Task } from '../types'
-import { accentOf, bar, crab, factRows, MODEL_TONE, taskBar, toneOf, warnRows, type Els, type Snapshot } from './band'
+import { accentOf, bar, crab, factRows, MODEL_TONE, taskBar, toneOf, ultraChip, warnRows, type Els, type Snapshot } from './band'
 import { fmtFit, fmtPct, fmtTime, fmtTokens } from './format'
 import { byText, costOf, deckCost, fmtUsd, moneyText, splitLine } from './orchestrate'
 import type { Prices } from '../types'
@@ -192,7 +192,7 @@ export function drawPane(els: Els, t: Snapshot): RenderElement {
         justifyContent: 'space-between',
         children: [
           Text({ children: [current ? fmtFit(current.name, Math.max(20, t.columns - 40)) : 'No task yet'], color: LIGHT }),
-          Text({ children: [r ? `route: ${r.model} · ${r.effort} · conf ${r.conf.toFixed(2)}` : 'route: —'], color: 'subtle' }),
+          Text({ children: [`${t.mode === 'claude' ? 'route: claude code' : r ? `route: ${r.model} · ${r.effort} · conf ${r.conf.toFixed(2)}` : 'route: —'}${ultraChip(t) ? ' · ultracode' : ''}`], color: 'subtle' }),
         ],
       }),
       ...warnRows(els, t),

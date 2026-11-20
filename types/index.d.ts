@@ -40,6 +40,15 @@ export type Options = {
   orchestrator: 'on' | 'hands' | 'off'
   // Size in bytes of the orchestrator rules injected into the main session, or null when they are not loaded
   rules: number | null
+  // router: the router picks model and effort. claude: Claude Code mode, every request passes through untouched
+  // (tracking, logs, deck, costs, guard and keep-warm go on).
+  mode: 'router' | 'claude'
+  // advise: the band shows an "ultracode" chip while the task's prompt names it, and warns when one task launches more
+  // than ultraMax Workflow agents. off: neither. The mod never turns ultracode on and never approves a Workflow call.
+  ultracode: 'off' | 'advise'
+  ultraMax: number
+  // on: a rate-limit failure on Fable that looks like a usage cap sends Fable requests to Opus until the reset. off: never.
+  fableFallback: 'on' | 'off'
 }
 
 // USD per million tokens, per model family. null = not filled in: the router never guesses a price.
@@ -103,6 +112,9 @@ export type Task = {
   tokensWrite?: number
   // Tool calls the manager guard refused on the main thread this turn: a high count means the rules need work
   blocks?: number
+  // The prompt named "ultracode", and how many Workflow agents the task has launched
+  ultra?: boolean
+  workflowAgents?: number
   agents: Agent[]
 }
 

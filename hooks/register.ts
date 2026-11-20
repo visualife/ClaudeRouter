@@ -4,12 +4,12 @@ import type { Agent, Effort, Model, Route, Task, Who } from '../types'
 import { JEV_TIMEOUT_MS, type JevPick, askJev } from './jev'
 import { DEFAULT_OPTIONS, OPTION_ALIASES, OPTION_COMMANDS, WARM_EVERY_MS, applyArgs, normalize, sizeText } from './options'
 import { type Pin, directiveOf, guard, managerVerdict, toLevel } from './guard'
-import { type End, type Line, type LogPaths, REVIEW_AGENT, blockLine, dateOf, endLine, followLine, fromJsonl, launchLine, logPaths, mainLine, mcpLine, mdOf, projectName, reviewPrompt, sessionLine, skillLine, skillsNamed, stamp, taskLine, toJsonl, verdictLine, verdictOf } from './sessionlog'
+import { type End, type Line, type LogPaths, REVIEW_AGENT, blockLine, dateOf, endLine, fallbackLine, followLine, fromJsonl, launchLine, logPaths, mainLine, mcpLine, mdOf, probeLine, projectName, reviewPrompt, sessionLine, skillLine, skillsNamed, stamp, taskLine, toJsonl, verdictLine, verdictOf, warmLine, workflowLine } from './sessionlog'
 import { type EnvFacts, type Front, type Io, agentDirs, costOf, deckText, effortForHeld, envFacts, envWarnings, findFront, isBuiltin, isRouted, mergePrices, parsePrices, pricesEmpty, whoSets } from './orchestrate'
 import { type Els, type Snapshot, drawBand, drawStrip } from './band'
 import { drawPane } from './pane'
 import { type Anim, animCells } from './pixel'
-import { carriesOn, creativeFloor, creativeOf, effortFor, familyOf, idFor, isPlanner, pickRoute, roleOf } from './route'
+import { MODEL_IDS, carriesOn, creativeFloor, creativeOf, effortFor, familyOf, idFor, isPlanner, pickRoute, roleOf } from './route'
 import { attachAgent, addPlugin, bumpMcp, bumpSkill, nameOf, patchAgent, patchTask, toUsage } from './lists'
 
 const COMMANDS: [string, string][] = [...OPTION_COMMANDS.map(c => [c, c] as [string, string]), ...Object.entries(OPTION_ALIASES)]
@@ -47,6 +47,30 @@ let turnPin: Pin | null = null
 let routedLocked: string | null = null
 // When the main thread last sent a request, for keep-warm
 let lastRequestAt: number | null = null
+// When busy went true, and when the main thread last stepped: a turn that never completes (a failure the host did not
+// report as complete) must not hold busy, and so the pings, forever
+let busySince = 0
+let lastStepAt = 0
+const BUSY_STUCK_MS = 20 * 60 * 1000
+// Keep-warm skips already logged in this idle period (one line per reason), and the idle period they belong to
+const skipLogged = new Set<string>()
+let skipPeriod: number | null = null
+let idleSince: number | null = null
+// Fable is out of usage: until this time (ms) every Fable request is sent as Opus. The model id the main thread last sent
+// says which model a rate-limit failure belongs to.
+let fableOut: { until: number; clock: string; note: string } | null = null
+let lastMainModel = ''
+const FABLE_OUT_DEFAULT_MS = 60 * 60 * 1000
+// Two rate-limit failures on Fable within 10 minutes, with no sign of a usage cap, hold Opus for 15 minutes
+const FABLE_REPEAT_WINDOW_MS = 10 * 60 * 1000
+const FABLE_REPEAT_HOLD_MS = 15 * 60 * 1000
+const PROBE_EVERY_MS = 10 * 60 * 1000
+let lastFableLimitAt: number | null = null
+let lastProbeAt: number | null = null
+const FABLE_OUT_WARNING = 'Fable out of usage · Opus until '
+// The error details are read for words only, never kept: "usage", "limit" or "quota" without "overloaded" or "try again"
+const looksLikeUsageCap = (details: unknown): boolean => typeof details === 'string' && /usage|limit|quota/i.test(details) && !/overloaded|try again/i.test(details)
+const detailsLength = (details: unknown): number | null => (typeof details === 'string' ? details.length : null)
 // The route the main thread last ran on, and the one the previous turn ended on. A short prompt with no signal of
 // its own ("yes go ahead") carries on with the latter. Null after a locked (passed-through) request.
 let lastMain: { model: Model; effort: Effort } | null = null
@@ -59,6 +83,8 @@ const jevMemo = new Map<string, JevPick | null>()
 const subagents = new Map<string, { text: string; subagentType?: string; who: Who }>()
 // The Agent call's own effort, by tool call id: agent.spawn does not carry it, the tool.call before it does
 const callEfforts = new Map<string, string>()
+// The Workflow the main thread last launched this task ('' when its input names none), or null when none has run
+let currentWorkflow: string | null = null
 // A main-thread turn woken by a sub-agent's hand-back continues the task it belongs to: its turn id points at that task
 const aliases = new Map<string, string>()
 const taskOf = (id: string) => aliases.get(id) ?? id
@@ -101,6 +127,53 @@ async function emit($: EngineInterface, line: Line): Promise<void> {
   logLines.push(line)
   await $.fs.write(logPath.jsonl, toJsonl(logLines)).catch(() => undefined)
 }
+// The part of a log file's name that identifies its session: the name without its "date-hhmm-" stamp
+const idOf = (f: string) => f.replace(/^\d{4}-\d{2}-\d{2}-\d{4}-/, '')
+// False when $.session.id() failed and the log runs under the placeholder id "session": such a log is never continued
+let sessionKnown = true
+
+// A session that started in a temp folder is logged under "spare-XXXX". When a later turn reports a real project folder,
+// the log moves under that project's name. It never overwrites a file: where the project already has a log of this
+// session (or a file of the same name), the lines are appended to that file, their task numbers continuing its own, and
+// the spare file is emptied (the mod has no way to delete a file) only after the write went through. Where the
+// existing file cannot be read back whole, or the write fails, both files stay as they are and the log stays in the spare folder.
+async function renameSpare($: EngineInterface, cwd: unknown): Promise<void> {
+  if (!logPath || typeof cwd !== 'string' || cwd.trim() === '') return
+  const current = logPath.dir.split('/').pop() ?? ''
+  const real = projectName(cwd)
+  if (!/^spare-/i.test(current) || /^spare-/i.test(real) || real === current) return
+  const old = logPath
+  const dir = `${old.dir.slice(0, old.dir.lastIndexOf('/'))}/${real}`
+  const name = `${(old.jsonl.split('/').pop() ?? '').replace(/\.jsonl$/, '')}.jsonl`
+  const names = await sessionFiles($, dir)
+  const same = sessionKnown ? (names.find(f => idOf(f) === idOf(name)) ?? null) : null
+  let target = same ?? name
+  for (let i = 2; same === null && names.includes(target); i++) target = name.replace(/\.jsonl$/, `-${i}.jsonl`)
+  let before: Line[] = []
+  if (same !== null) {
+    const text = await $.fs.read(`${dir}/${same}`).then(t => (typeof t === 'string' ? t : null), () => null)
+    if (text === null) return
+    before = fromJsonl(text)
+    // A row that does not parse would be lost by the rewrite: keep both files instead
+    if (before.length !== text.split(/\r?\n/).filter(r => r.trim() !== '').length) return
+  }
+  const offset = before.filter(l => l.t === 'task').length
+  const ours = logLines.map(l => {
+    const moved = l.t === 'session' && l.phase === 'start' ? { ...l, project: real } : l
+    return offset > 0 && typeof moved.n === 'number' ? { ...moved, n: moved.n + offset } : moved
+  })
+  const merged = [...before, ...ours]
+  const file = `${dir}/${target}`
+  const written = await $.fs.write(file, toJsonl(merged)).then(() => true, () => false)
+  if (!written) return
+  logPath = { dir, jsonl: file, md: file.replace(/\.jsonl$/, '.md') }
+  logLines = merged
+  taskNo += offset
+  for (const meta of agentMeta.values()) meta.n += offset
+  await $.fs.write(old.jsonl, '').catch(() => undefined)
+  await update($, logfile, () => file)
+}
+const GENERAL_WARNING = 'general-purpose launched: use a roster agent'
 const mode$ = async ($: EngineInterface) => normalize(await read($, options)).orchestrator
 const costNow = async ($: EngineInterface, model: string, use: { tokensIn?: number; tokensWrite?: number; tokensCached?: number; tokensOut?: number }) => costOf(model, use, await read($, prices))
 
@@ -123,6 +196,25 @@ async function injectRules($: EngineInterface, rules: string): Promise<string | 
   }
 }
 
+// Whether the main conversation already holds the rules note (a resumed session): session.start carries no resume flag,
+// so the conversation itself is read back. A conversation that cannot be read counts as not holding them.
+const RULES_OPEN = '<orchestrator-rules source='
+async function holdsRules($: EngineInterface): Promise<boolean> {
+  try {
+    const messages: unknown = await $.session.messages({})
+    return Array.isArray(messages) && messages.some(m => m?.role === 'user' && typeof m.text === 'string' && m.text.trimStart().startsWith(RULES_OPEN))
+  } catch {
+    return false
+  }
+}
+
+// The rules could not be put into the conversation: the orchestrator goes off for the session, so the guard never
+// blocks the main thread with no rules loaded to explain why
+async function rulesFailed($: EngineInterface, why: string): Promise<void> {
+  await update($, options, o => ({ ...normalize(o), orchestrator: 'off' as const, rules: null }))
+  $.ui.toast(`ClaudeRouter: orchestrator off: the rules could not be loaded (${why})`)
+}
+
 // The price table: the file shipped with the plugin (empty), overridden field by field by ~/.claude/clauderouter-prices.json.
 // A file that is missing or does not parse is an empty table: no price is ever guessed.
 async function loadPrices($: EngineInterface): Promise<void> {
@@ -141,8 +233,10 @@ async function sessionFiles($: EngineInterface, dir: string): Promise<string[]> 
 // Gathers what a drawing reads. The validator follows $ only into functions declared at the top of the file.
 async function snapshot($: EngineInterface, surface: string, columns: number, rows: number): Promise<Snapshot> {
   const now = await $.clock.now()
-  const { warmUntil } = normalize(await read($, options))
+  const { warmUntil, ultracode, ultraMax } = normalize(await read($, options))
   return {
+    ultracode,
+    ultraMax,
     warm: warmUntil > now ? { until: warmUntil, pingAt: lastRequestAt === null ? null : lastRequestAt + WARM_EVERY_MS } : null,
     route: await read($, route),
     tasks: await read($, tasks),
@@ -155,6 +249,7 @@ async function snapshot($: EngineInterface, surface: string, columns: number, ro
     warnings: await read($, warnings),
     prices: await read($, prices),
     orchestrator: normalize(await read($, options)).orchestrator,
+    mode: normalize(await read($, options)).mode,
     now,
     frame,
     terminal: surface === 'terminal',
@@ -167,6 +262,16 @@ async function snapshot($: EngineInterface, surface: string, columns: number, ro
 export const register: Register = on => {
   // Runs before your first prompt, and again after a reload
   on('session.start', async ($, e, next) => {
+    fableOut = null
+    lastFableLimitAt = null
+    lastProbeAt = null
+    lastMainModel = ''
+    busy = false
+    busySince = 0
+    lastStepAt = 0
+    skipLogged.clear()
+    skipPeriod = null
+    idleSince = null
     await $.command.register({ name: 'cr', description: 'Open ClaudeRouter: cost, tokens, time, running and finished agents', immediate: true })
     await $.command.register({ name: 'cr-log', description: 'ClaudeRouter: this session\'s log as a table (/cr-log last: the previous session\'s)', immediate: true })
     await $.command.register({ name: 'cr-review', description: 'ClaudeRouter: review the last n session logs of this project (default 10) with one Sonnet agent', immediate: true })
@@ -194,20 +299,46 @@ export const register: Register = on => {
     const mine = normalize(await read($, options))
     if (mine.orchestrator !== 'off' && mine.rules === null) {
       const rules = await loadRules($)
-      if (rules !== null && (await injectRules($, rules)) === null) await update($, options, o => ({ ...normalize(o), rules: byteLength(rules) }))
+      if (rules === null) {
+        // On by default, but with no rules file there is nothing to manage by: off, said once
+        await update($, options, o => ({ ...normalize(o), orchestrator: 'off' as const, rules: null }))
+        $.ui.toast(`ClaudeRouter: orchestrator off: the rules file is missing or empty (${rulesPath()})`)
+      } else {
+        // A resumed conversation already holds the rules: noted as loaded, not injected a second time
+        const failed = (await holdsRules($)) ? null : await injectRules($, rules)
+        if (failed === null) await update($, options, o => ({ ...normalize(o), rules: byteLength(rules) }))
+        else await rulesFailed($, failed)
+      }
     }
-    // The session log: a new file, or the one a reload was already writing
+    // The session log: a new file, the one a reload was already writing, or the one this session id already has
     if (home) {
       const prior = await read($, logfile)
+      // An id that cannot be read is no id: the log is then a new stamped file, never one an earlier session left
+      const gotId = await $.session.id().then(v => (typeof v === 'string' && v.trim() !== '' ? v : null), () => null)
+      const sid = gotId ?? 'session'
+      sessionKnown = gotId !== null
       if (prior) {
         logPath = { jsonl: prior, md: prior.replace(/\.jsonl$/, '.md'), dir: prior.slice(0, prior.lastIndexOf('/')) }
         logLines = fromJsonl(await $.fs.read(prior).then(t => (typeof t === 'string' ? t : ''), () => ''))
         taskNo = logLines.filter(l => l.t === 'task').length
       } else {
         const at = await $.clock.now()
-        logPath = logPaths(home, e.cwd, at, await $.session.id().catch(() => 'session'))
-        logLines = []
-        taskNo = 0
+        logPath = logPaths(home, e.cwd, at, sid)
+        // One file per session: a log of the same session id in this project's folder is continued, not duplicated
+        const want = idOf(logPath.jsonl.split('/').pop() ?? '')
+        const files = await sessionFiles($, logPath.dir)
+        const same = sessionKnown ? files.find(f => idOf(f) === want) : undefined
+        // No id: a name no file has yet, so a log of the same minute is not overwritten either
+        if (!sessionKnown) {
+          const stem = (logPath.jsonl.split('/').pop() ?? '').replace(/\.jsonl$/, '')
+          let k = 1
+          let free = stem
+          while (files.includes(`${free}.jsonl`)) free = `${stem}-${++k}`
+          logPath = { dir: logPath.dir, jsonl: `${logPath.dir}/${free}.jsonl`, md: `${logPath.dir}/${free}.md` }
+        }
+        if (same) logPath = { dir: logPath.dir, jsonl: `${logPath.dir}/${same}`, md: `${logPath.dir}/${same.replace(/\.jsonl$/, '.md')}` }
+        logLines = same ? fromJsonl(await $.fs.read(logPath.jsonl).then(t => (typeof t === 'string' ? t : ''), () => '')) : []
+        taskNo = logLines.filter(l => l.t === 'task').length
         const file = logPath.jsonl
         await update($, logfile, () => file)
         await emit($, sessionLine(at, 'start', projectName(e.cwd), await mode$($)))
@@ -251,10 +382,37 @@ export const register: Register = on => {
       const { warmUntil } = await read($, options)
       // The clock row counts in minutes: redraw once a minute while a window is open
       if (warmUntil > now) $.ui.invalidate('ui.render')
-      if (warmUntil <= now || busy || lastRequestAt === null || now - lastRequestAt < WARM_EVERY_MS) return
+      // A turn that never completed and shows no step for 20 min is not running: clear busy so the pings go on
+      if (busy && now - Math.max(busySince, lastStepAt) > BUSY_STUCK_MS) busy = false
+      // The idle period is counted from the last main-thread request; with none yet, from the first tick that saw none
+      if (lastRequestAt === null && idleSince === null) idleSince = now
+      const idleFrom = lastRequestAt ?? idleSince ?? now
+      if (skipPeriod !== idleFrom) { skipLogged.clear(); skipPeriod = idleFrom }
+      // The ping is due once 50 min have passed since then; a window that never opened (warm off) has nothing to skip
+      const due = now - idleFrom >= WARM_EVERY_MS
+      const skip = warmUntil <= now ? (warmUntil > 0 ? 'window-closed' as const : null) : busy ? 'busy' as const : lastRequestAt === null ? 'no-request' as const : null
+      if (skip) {
+        // No silent skip: say why the due ping was not sent, once per reason per idle period
+        if (due && !skipLogged.has(skip)) {
+          skipLogged.add(skip)
+          await emit($, warmLine(now, taskNo, { minutesLeft: (warmUntil - now) / 60_000, ok: false, skip }))
+        }
+        return
+      }
+      if (!due || warmUntil <= now) return
+      // The fork re-sends the main thread's last request (its model, effort, system, tools) with the prompt after it:
+      // it takes no model or effort of its own, so it shares the main cache by construction
       const reply = await $.model.fork({ prompt: 'Reply with the single word: warm' }).catch(() => null)
       // A failed ping ends the window: the cache is probably gone, and retrying would only pay to write it again
-      if (!reply || !reply.isAnswered) await update($, options, o => ({ ...o, warmUntil: 0 }))
+      const ok = Boolean(reply?.isAnswered)
+      // The log keeps the time, the minutes left in the window and the fork's token counts, never the ping's text.
+      // cached (cache read) near zero with a large write: the fork did not share the main prefix.
+      const u = (reply as { usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } } | null)?.usage
+      const counts = u
+        ? { cached: u.cache_read_input_tokens ?? 0, written: u.cache_creation_input_tokens ?? 0, in: u.input_tokens ?? 0, out: u.output_tokens ?? 0, model: lastMainModel }
+        : { usage: 'none' as const, model: lastMainModel }
+      await emit($, warmLine(now, taskNo, { minutesLeft: (warmUntil - now) / 60_000, ok, ...counts }))
+      if (!ok) await update($, options, o => ({ ...o, warmUntil: 0 }))
       else lastRequestAt = now
     })
     return next(e)
@@ -273,11 +431,20 @@ export const register: Register = on => {
         const size = byteLength(rules)
         // Already loaded in this conversation (on to hands on, or the reverse): do not load them twice
         const failed = current.orchestrator !== 'off' && current.rules !== null ? null : await injectRules($, rules)
-        await update($, options, () => ({ ...next, rules: failed === null ? size : null }))
-        if (failed !== null) return { text: `orchestrator: ${next.orchestrator === 'on' ? 'on · manager only' : 'hands on · guard off'} · rules NOT loaded (${failed})` }
+        if (failed !== null) {
+          await rulesFailed($, failed)
+          return { text: `orchestrator: off · rules NOT loaded (${failed})` }
+        }
+        await update($, options, () => ({ ...next, rules: size }))
         return { text: next.orchestrator === 'on' ? `orchestrator: on · manager only · rules loaded (${sizeText(size)})` : `orchestrator: hands on · guard off · rules loaded (${sizeText(size)})` }
       }
       if (next) await update($, options, () => next)
+      // /cr-fable reset and /cr-fable off: the fallback ends now
+      if (sub === 'fable' && ['reset', 'off'].includes(e.args.trim().toLowerCase())) {
+        fableOut = null
+        lastFableLimitAt = null
+        await update($, warnings, list => list.filter(w => !w.startsWith(FABLE_OUT_WARNING)))
+      }
       return { text }
     }).catch(($, e, next) => next(e))
   }
@@ -351,6 +518,7 @@ export const register: Register = on => {
     // A sub-agent's own run is not a task: its row is the agent under the task that spawned it
     if (e.agentId) return next(e)
     busy = true
+    busySince = await $.clock.now()
     // A hand-back wakes the main loop to read a sub-agent's report: it continues the last task, it is not a new one
     const last = (await read($, tasks)).at(-1)
     if (last && HAND_BACK.test(e.text)) {
@@ -361,8 +529,20 @@ export const register: Register = on => {
     }
     turnId = e.turnId
     turnText = e.text
-    taskNo += 1
-    await emit($, taskLine(await $.clock.now(), taskNo, e.text, await mode$($)))
+    // An empty prompt is not a logged task (it would be a junk row)
+    const logged = e.text.trim() !== ''
+    if (logged) taskNo += 1
+    // "ultracode" in the prompt: only noted. The person turns it on; the mod never does.
+    const ultra = /\bultracode\b/i.test(e.text)
+    currentWorkflow = null
+    // A new task clears the last task's general-purpose warning
+    await update($, warnings, list => list.filter(w => w !== GENERAL_WARNING))
+    // A spare-* session whose turn now reports a real project folder moves its log under that project's name
+    await renameSpare($, (e as { cwd?: unknown }).cwd)
+    // The folder the turn runs in is the project the manager guard allows its project files in
+    const reported = (e as { cwd?: unknown }).cwd
+    if (typeof reported === 'string' && reported.trim() !== '') sessionCwd = reported
+    if (logged) await emit($, taskLine(await $.clock.now(), taskNo, e.text, await mode$($), ultra))
     turnTools = []
     turnPin = directiveOf(e.text)
     prevRoute = lastMain
@@ -378,6 +558,8 @@ export const register: Register = on => {
       model: null,
       effort: null,
       tokens: null,
+      ultra,
+      workflowAgents: 0,
       agents: [],
     }
     await update($, tasks, list => [...list.slice(-19), task])
@@ -385,12 +567,64 @@ export const register: Register = on => {
   })
 
   // Runs before each request to the model: picks the model and effort, then records what was chosen
-  on('turn.step', async function* ($, e, next) {
+  // A main-thread request that failed on a rate limit while it ran on Fable: Fable is out. Opus carries the session until
+  // the reset time (a rate-limit window at 100% that says when it resets), else an hour. The engine offers no way to retry
+  // from here, so the next request is the retry. Only the error's kind is read, never its text.
+  // It only triggers when the failure looks like a usage cap: a rate-limit window at 100%, or details that say usage, limit
+  // or quota. A plain 429 triggers nothing the first time; a second within 10 minutes holds Opus for 15 minutes.
+  // The engine's signal is not confirmed yet: a `probe` log line records each failure's shape (never its text).
+  on('classic.StopFailure', async ($, e, next) => {
+    // A failed main turn may never reach turn.complete: it is over, so it no longer holds the pings back
+    if (!e.agent_id) busy = false
+    const now = await $.clock.now()
+    const spent = await $.session.usage().then(u => u.rateLimits, () => [])
+    const details = (e as { error_details?: unknown }).error_details
+    await emit($, probeLine(now, { source: 'failure', code: typeof e.error === 'string' ? e.error : null, detailsLen: detailsLength(details), who: e.agent_id ? 'agent' : 'main', family: familyOf(lastMainModel), limits: spent }))
+    const enabled = normalize(await read($, options)).fableFallback !== 'off'
+    if (enabled && e.error === 'rate_limit' && !e.agent_id && familyOf(lastMainModel) === 'fable' && !fableOut) {
+      const capped = spent.some(r => r.percentUsed >= 100)
+      const repeat = lastFableLimitAt !== null && now - lastFableLimitAt <= FABLE_REPEAT_WINDOW_MS
+      lastFableLimitAt = now
+      let until: number | null = null
+      if (capped || looksLikeUsageCap(details)) {
+        const resets = spent.filter(r => r.percentUsed >= 100 && r.resetsAt).map(r => Date.parse(r.resetsAt as string)).filter(t => Number.isFinite(t) && t > now)
+        until = resets.length > 0 ? Math.min(...resets) : now + FABLE_OUT_DEFAULT_MS
+      } else if (repeat) until = now + FABLE_REPEAT_HOLD_MS
+      if (until !== null) {
+        const at = new Date(until)
+        const clock = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
+        fableOut = { until, clock, note: '' }
+        lastFableLimitAt = null
+        await update($, warnings, list => [...list.filter(w => !w.startsWith(FABLE_OUT_WARNING)), `${FABLE_OUT_WARNING}${clock}`])
+        await emit($, fallbackLine(now, { from: MODEL_IDS.fable, to: MODEL_IDS.opus, until, reason: 'rate_limit' }))
+      }
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  on('turn.step', async function* ($, request, next) {
+    // Fable out of usage: after the reset the state clears; until then a Fable request goes out as Opus, effort unchanged.
+    // This beats the Fable lock and claude mode, for the main thread and for sub-agents alike.
+    if (fableOut && (await $.clock.now()) >= fableOut.until) {
+      fableOut = null
+      await update($, warnings, list => list.filter(w => !w.startsWith(FABLE_OUT_WARNING)))
+    }
+    const swapped = fableOut !== null && familyOf(request.model) === 'fable'
+    const e = swapped ? { ...request, model: MODEL_IDS.opus } : request
     const sub = e.agentId ? subagents.get(e.agentId) : undefined
     const meta = e.agentId ? agentMeta.get(e.agentId) : undefined
     if (meta) meta.steps += 1
     // Options saved by an older version lack the guard fields, or carry the old fableLock flag: normalize fills them in
     const opts = normalize(await read($, options))
+    // A fallback that overrides a pin or the Fable lock says so in the band
+    if (swapped && fableOut && !e.agentId) {
+      const note = turnPin?.model === 'fable' || opts.pin === 'fable' ? ' · pin paused' : opts.locks.includes('fable') ? ' · lock paused' : ''
+      if (note !== fableOut.note) {
+        fableOut.note = note
+        const text = `${FABLE_OUT_WARNING}${fableOut.clock}${note}`
+        await update($, warnings, list => [...list.filter(w => !w.startsWith(FABLE_OUT_WARNING)), text])
+      }
+    }
     const input = {
       text: e.agentId ? (sub?.text ?? '') : turnText,
       tools: e.agentId ? [] : turnTools,
@@ -401,7 +635,10 @@ export const register: Register = on => {
     }
     let pick = pickRoute(input)
     let by: Route['by'] = 'rules'
-    if (!e.agentId) lastRequestAt = await $.clock.now()
+    if (!e.agentId) {
+      lastRequestAt = await $.clock.now()
+      lastStepAt = lastRequestAt
+    }
     // Pass-through: the request keeps the model and effort it arrived with, and the band says why.
     //  - orchestrator mode, or a model lock (Fable by default), or an id the router does not know: a main-thread
     //    session is left alone, unless a pin or an "@model" prefix says otherwise.
@@ -411,14 +648,17 @@ export const register: Register = on => {
     const family = familyOf(e.model)
     const locked = family !== null && opts.locks.includes(family)
     const orchestrating = opts.orchestrator !== 'off'
-    const lockMain = !e.agentId && (orchestrating || family === null || locked) && !turnPin && !opts.pin && e.model !== routedLocked
+    const lockMain = !e.agentId && (orchestrating || family === null || locked || swapped) && !turnPin && !opts.pin && e.model !== routedLocked
     const heldModel = Boolean(e.agentId) && (locked || (sub !== undefined && !isRouted(sub.who.model)))
     const heldEffort = Boolean(e.agentId) && (locked || (sub !== undefined && !isRouted(sub.who.effort)))
-    if (lockMain || (heldModel && heldEffort)) {
+    // Claude Code mode: nothing is changed, pins and locks included; the turn is still recorded
+    const claudeMode = opts.mode === 'claude'
+    if (claudeMode || lockMain || (heldModel && heldEffort)) {
       const level = toLevel(e.effort)
       const shown: Model = family ?? 'fable'
+      if (!e.agentId) lastMainModel = e.model
       const passed = yield* next(e)
-      const why = e.agentId
+      const why = claudeMode ? 'claude code mode · routing off' : e.agentId
         ? (sub ? `model ${sub.who.model} · effort ${sub.who.effort} · left as they are` : `${family} lock · agent left as it is`)
         : orchestrating && !(family === null || locked) ? 'orchestrator · your model choice is left as it is' : `${family ?? 'unknown model'} lock · your model choice is left as it is`
       const kept: Route = { model: shown, effort: level ?? 'high', conf: 1, kept: true, by: 'rules', engineModel: e.model, source: e.agentId ? 'subagent' : 'main', why }
@@ -485,9 +725,12 @@ export const register: Register = on => {
       const level = toLevel(e.effort)
       if (level) pick = { ...pick, effort: level }
     }
+    // Fable is out: nothing the router or a pin picks may go to Fable
+    if (fableOut && pick.model === 'fable') pick = { ...pick, model: 'opus' }
     const kept = familyOf(e.model) === pick.model
     const sentId = heldModel ? e.model : idFor(pick.model, e.model)
     if (!e.agentId) {
+      lastMainModel = sentId
       routedLocked = opts.locks.includes(pick.model) ? sentId : null
       lastMain = { model: pick.model, effort: pick.effort }
     }
@@ -529,11 +772,12 @@ export const register: Register = on => {
     // Manager guard: with the orchestrator on, the main thread (never a sub-agent) may not read code, edit files or run
     // commands. The refusal names the agent to use. A guard that fails lets the call through (see .catch below).
     if (!e.agentId && normalize(await read($, options)).orchestrator === 'on') {
-      const denied = managerVerdict(e.tool, e as unknown as Record<string, unknown>, { home })
+      const denied = managerVerdict(e.tool, e as unknown as Record<string, unknown>, { home, cwd: sessionCwd })
       if (denied !== null) {
         const task = turnId
         await update($, tasks, list => list.map(t => (t.id === task ? { ...t, blocks: (t.blocks ?? 0) + 1 } : t)))
-        await emit($, blockLine(await $.clock.now(), taskNo, denied))
+        const command = (e as unknown as Record<string, unknown>).command
+        await emit($, blockLine(await $.clock.now(), taskNo, { ...denied, ...(typeof command === 'string' ? { command } : {}) }))
         return { deny: denied.message }
       }
     }
@@ -557,6 +801,13 @@ export const register: Register = on => {
       const known = [...agentMeta.entries()].find(([id]) => id === target)?.[1]
       await emit($, followLine(await $.clock.now(), taskNo, known?.type ?? target))
     }
+    // A Workflow call is always allowed here: it is logged by its meta name (when the input has one) and remembered, so its agents carry it
+    if (e.tool === 'Workflow' && !e.agentId) {
+      const meta = raw.meta as { name?: unknown } | undefined
+      const named = typeof meta?.name === 'string' ? meta.name : typeof raw.name === 'string' ? raw.name : ''
+      currentWorkflow = named
+      await emit($, workflowLine(await $.clock.now(), taskNo, named || null))
+    }
     if (!e.agentId) turnTools = [...turnTools.slice(-49), e.tool]
     // An Agent call's own effort rides with the spawn that follows it, which does not carry it
     if (e.tool === 'Agent' && typeof e.effort === 'string') {
@@ -576,7 +827,8 @@ export const register: Register = on => {
     const done = await next(e)
     if (!e.agentId && normalize(await read($, options)).orchestrator !== 'off') {
       const rules = await loadRules($)
-      if (rules !== null) await injectRules($, rules)
+      const failed = rules === null ? null : await injectRules($, rules)
+      if (failed !== null) await rulesFailed($, failed)
     }
     return done
   }).catch(($, e, next) => next(e))
@@ -610,13 +862,18 @@ export const register: Register = on => {
     const text = `${e.description} ${e.prompt}`
     const opts = normalize(await read($, options))
     const front = e.fork ? null : await frontOf($, e.subagentType)
-    const callEffort = callEfforts.get(e.tool_use_id)
+    // The effort the Agent call rode in on, or the one the spawn itself carries
+    const spawnEffort = (e as { effort?: unknown }).effort
+    const callEffort = callEfforts.get(e.tool_use_id) ?? (typeof spawnEffort === 'string' ? spawnEffort : undefined)
     callEfforts.delete(e.tool_use_id)
+    // Only a Workflow's own agents count toward the ultracode warning, not a plain Agent call made after a Workflow ran
+    const isWorkflowAgent = e.subagentType === 'workflow-subagent'
     let who = whoSets({
       callModel: e.model,
       callEffort,
       front,
-      builtin: isBuiltin(e.subagentType),
+      // A Workflow's agent has no agent file to read: without this it counts as "blind" (by=default) and is never routed
+      builtin: isBuiltin(e.subagentType) || e.subagentType === 'workflow-subagent',
       fork: e.fork,
       envModel: env.force,
       envEffort: env.effort,
@@ -629,12 +886,19 @@ export const register: Register = on => {
     // the orchestrator, so a subagent that nothing sets is routed like any other.
     const parentFamily = familyOf(e.parentModel)
     const parentLocked = parentFamily === null || opts.locks.includes(parentFamily)
-    const inherit = isRouted(who.model) && parentLocked && opts.orchestrator === 'off'
+    // A Workflow's agents arrive with no parentModel: that is "unknown", not a locked parent, so they are routed (Opus/Fable down to Sonnet)
+    const parentUnknown = e.parentModel === undefined || e.parentModel === null || e.parentModel === ''
+    const inherit = isRouted(who.model) && parentLocked && opts.orchestrator === 'off' && !(e.subagentType === 'workflow-subagent' && parentUnknown)
     if (inherit) who = { model: 'default', effort: isRouted(who.effort) ? 'default' : who.effort }
-    const sendModel = isRouted(who.model) ? spawnModel : inherit ? e.parentModel : e.model
+    // Claude Code mode: the Agent call goes out exactly as it came
+    const sendModel = opts.mode === 'claude' ? e.model : isRouted(who.model) ? spawnModel : inherit ? e.parentModel : e.model
     const result = await next(sendModel === e.model ? e : { ...e, model: sendModel })
     if (result.deny) return result
 
+    // Orchestrator on: a general-purpose agent has no roster role, the band says so
+    if (opts.orchestrator === 'on' && e.subagentType === 'general-purpose') {
+      await update($, warnings, list => (list.includes(GENERAL_WARNING) ? list : [...list, GENERAL_WARNING]))
+    }
     if (result.agentId) subagents.set(result.agentId, { text, subagentType: e.subagentType, who })
     const agent: Agent = {
       id: result.agentId ?? null,
@@ -653,17 +917,22 @@ export const register: Register = on => {
       tokensCached: 0,
       tokensOut: 0,
     }
-    await update($, tasks, list => attachAgent(list, turnId, agent))
+    await update($, tasks, list => {
+      const attached = attachAgent(list, turnId, agent)
+      return isWorkflowAgent ? patchTask(attached, turnId, { workflowAgents: (attached.find(t => t.id === turnId)?.workflowAgents ?? 0) + 1 }) : attached
+    })
     if (result.agentId) {
       const named = skillsNamed(e.prompt)
       agentMeta.set(result.agentId, { n: taskNo, type: e.subagentType, model: result.model, named, maxTurns: Number(front?.maxTurns) > 0 ? Number(front?.maxTurns) : null, steps: 0 })
-      await emit($, launchLine(await $.clock.now(), taskNo, { id: result.agentId, type: e.subagentType, model: result.model, effort: agent.effort, by: who, brief: e.prompt, skills: named }))
+      await emit($, launchLine(await $.clock.now(), taskNo, { id: result.agentId, type: e.subagentType, model: result.model, effort: agent.effort, by: who, brief: e.prompt, skills: named, wf: e.subagentType === 'workflow-subagent' ? (currentWorkflow || 'workflow') : null }))
     }
     return result
   }).catch(($, e, next) => next(e))
 
   // Runs when a turn ends, for the main conversation and for each subagent
   on('turn.complete', async ($, e, next) => {
+    // First thing, so an error in the log or state work below (or an aborted turn) cannot leave busy set
+    if (!e.agentId) busy = false
     const tokens = e.usage ? e.usage.input_tokens + e.usage.output_tokens : 0
     // What the turn was billed for, split: prompt tokens fresh (input + cache writes), prompt tokens the cache served, output
     const split = {
@@ -692,16 +961,25 @@ export const register: Register = on => {
       } else if (agentId && meta) {
         const how: End = e.reason === 'error' ? 'failed' : meta.maxTurns !== null && meta.steps >= meta.maxTurns ? 'maxTurns' : 'ended'
         await emit($, endLine(at, meta.n, { id: agentId, agent: meta.type, model: model || meta.model, in: split.tokensIn, cached: split.tokensCached, out: split.tokensOut, cost, sec: seconds, turns: meta.steps, end: how }))
-        if (/(^|:)verifier$/i.test(meta.type)) await emit($, verdictLine(at, meta.n, { id: agentId, ...(meta.handback ?? verdictOf(e.answer)) }))
+        if (/(^|:)verifier$/i.test(meta.type)) {
+          const counted = meta.handback ?? verdictOf(e.answer)
+          // Cut at its turn cap with no PASS/FAIL/NOT CHECKED line in the report: 'cut', not 'not checked'
+          const v = how === 'maxTurns' && counted.pass + counted.fail + counted.unchecked === 0 ? { ...counted, verdict: 'cut' as const } : counted
+          await emit($, verdictLine(at, meta.n, { id: agentId, ...v }))
+        }
       } else if (!agentId) {
-        await emit($, mainLine(at, taskNo, { model: model || '—', effort: (await read($, route))?.effort ?? null, in: split.tokensIn, cached: split.tokensCached, out: split.tokensOut, cost, sec: seconds }))
+        // A turn with no tokens and no model (a keep-warm fork, an aborted turn) is not a record
+        const empty = !model && split.tokensIn + split.tokensCached + split.tokensOut + split.tokensWrite === 0
+        if (!empty) await emit($, mainLine(at, taskNo, { model: model || '—', effort: (await read($, route))?.effort ?? null, in: split.tokensIn, cached: split.tokensCached, out: split.tokensOut, cost, sec: seconds }))
+        // The report is rewritten after each main turn, so a session that never sees session.end (a spare one) still has it
+        if (logPath) await $.fs.write(logPath.md, mdOf(logLines, at)).catch(() => undefined)
       }
     }
 
     if (agentId) {
       await update($, tasks, list => patchAgent(list, agentId, { status, seconds, tokens, ...split }))
     } else {
-      busy = false
+      busy = false // also when isAborted
       const own = taskOf(e.turnId)
       // A continued task adds the turn to what it already spent
       await update($, tasks, list => list.map(t => t.id !== own ? t : own === e.turnId ? { ...t, status, seconds, tokens, ...split } : {
@@ -724,6 +1002,12 @@ export const register: Register = on => {
   // Runs when the session's figures change: context, rate limits, cost
   on('session.measure', async ($, e, next) => {
     await update($, usage, prev => toUsage({ ...e, startedAt: prev?.startedAt ?? 0 }))
+    const now = await $.clock.now()
+    if (lastProbeAt === null || now - lastProbeAt >= PROBE_EVERY_MS) {
+      lastProbeAt = now
+      const limits = (e as { rateLimits?: unknown }).rateLimits
+      await emit($, probeLine(now, { source: 'measure', code: null, detailsLen: null, who: 'none', family: familyOf(lastMainModel), limits: Array.isArray(limits) ? limits : [] }))
+    }
     return next(e)
   })
 

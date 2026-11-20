@@ -83,6 +83,7 @@ test('turn.step goes down on the routed model and effort', async ($, on) => {
     sent = `${e.model}/${e.effort}`
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
   })
+  await $.command.run({ command: 'cr-orchestrator', args: 'off', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
   await $.turn.start({ turnId: 't1', text: 'list the files and read the README' })
   const step = $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 1 })
   for await (const _ of step) {
@@ -392,6 +393,7 @@ test('"yes go ahead" is sent on the model and effort the last turn ended on', as
     sent.push(`${e.model}/${e.effort}`)
     return STEP_DONE(e)
   })
+  await $.command.run({ command: 'cr-orchestrator', args: 'off', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
   await $.turn.start({ turnId: 't1', text: 'fix the failing test in router.test.ts' })
   for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-sonnet-5-5', effort: 'low', messageCount: 1 })) { /* drain */ }
   await $.turn.complete({ turnId: 't1', reason: 'answer', isAborted: false, durationMs: 100, answer: '' })
@@ -426,4 +428,55 @@ test('Jev is asked once per turn, not before every request, and not about a prom
   await $.turn.start({ turnId: 't3', text: 'continue' })
   for await (const _ of $.turn.step({ turnId: 't3', index: 0, model: 'claude-sonnet-5-5', effort: 'medium', messageCount: 7 })) { /* drain */ }
   expect(calls).toBe(2)
+})
+
+// Claude Code mode: /cr-mode claude turns routing off, /cr-mode router turns it back on
+const OPUS_PROMPT = 'plan the architecture and debug the token check across modules'
+const CMD_MODE = { origin: { kind: 'composer' as const }, presentation: { isFullscreen: false, columns: 80 } }
+
+test('the default mode is router', () => {
+  expect(DEFAULT_OPTIONS.mode).toBe('router')
+})
+
+test('/cr-mode accepts router and claude and rejects anything else', () => {
+  expect(applyArgs('mode claude', DEFAULT_OPTIONS, 0).next?.mode).toBe('claude')
+  expect(applyArgs('mode router', { ...DEFAULT_OPTIONS, mode: 'claude' }, 0).next?.mode).toBe('router')
+  expect(applyArgs('mode  CLAUDE', DEFAULT_OPTIONS, 0).next?.mode).toBe('claude')
+  for (const bad of ['mode', 'mode on', 'mode opus']) {
+    const r = applyArgs(bad, DEFAULT_OPTIONS, 0)
+    expect(r.next).toBeNull()
+    expect(r.text).toMatch(/mode takes router or claude/)
+  }
+  expect(applyArgs('status', { ...DEFAULT_OPTIONS, mode: 'claude' }, 0).text).toMatch(/mode: claude code/)
+})
+
+test('a prompt that routes to Opus in router mode changes nothing in claude mode', async ($, on) => {
+  world(on)
+  const sent: string[] = []
+  on('turn.step', async function* (_$, e) {
+    sent.push(`${e.model}/${e.effort}`)
+    return STEP_DONE(e)
+  })
+  await $.command.run({ command: 'cr-orchestrator', args: 'off', ...CMD_MODE })
+  const step = async (turnId: string) => {
+    await $.turn.start({ turnId, text: OPUS_PROMPT })
+    for await (const _ of $.turn.step({ turnId, index: 0, model: 'claude-sonnet-5-5', effort: 'medium', messageCount: 1 })) { /* drain */ }
+  }
+  await step('t1')
+  expect(sent[0]).not.toBe('claude-sonnet-5-5/medium')
+  expect(sent[0]).toMatch(/^claude-opus/)
+  const said = await $.command.run({ command: 'cr-mode', args: 'claude', ...CMD_MODE })
+  expect(said.text).toMatch(/^mode: claude code/)
+  await step('t2')
+  expect(sent[1]).toBe('claude-sonnet-5-5/medium')
+  // a creative prompt and a pin are left alone as well
+  await $.command.run({ command: 'cr-pin', args: 'haiku', ...CMD_MODE })
+  await $.turn.start({ turnId: 't3', text: 'write the brand identity and tagline' })
+  for await (const _ of $.turn.step({ turnId: 't3', index: 0, model: 'claude-sonnet-5-5', effort: 'medium', messageCount: 1 })) { /* drain */ }
+  expect(sent[2]).toBe('claude-sonnet-5-5/medium')
+  // back to router: routing resumes
+  await $.command.run({ command: 'cr-pin', args: 'auto', ...CMD_MODE })
+  await $.command.run({ command: 'cr-mode', args: 'router', ...CMD_MODE })
+  await step('t4')
+  expect(sent[3]).toMatch(/^claude-opus/)
 })

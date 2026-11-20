@@ -170,9 +170,9 @@ test('a model set by someone else gets the router\'s effort, held to medium unle
   expect(byText({ model: 'frontmatter', effort: 'router' })).toBe('model frontmatter · effort router')
 })
 
-test('orchestrator is off by default, and /cr-orchestrator turns it on and off', () => {
-  expect(DEFAULT_OPTIONS.orchestrator).toBe('off')
-  expect(applyArgs('orchestrator on', DEFAULT_OPTIONS, 0).next?.orchestrator).toBe('on')
+test('orchestrator is on by default, and /cr-orchestrator turns it on and off', () => {
+  expect(DEFAULT_OPTIONS.orchestrator).toBe('on')
+  expect(applyArgs('orchestrator on', { ...DEFAULT_OPTIONS, orchestrator: 'off' }, 0).next?.orchestrator).toBe('on')
   expect(applyArgs('orchestrator off', { ...DEFAULT_OPTIONS, orchestrator: 'on' }, 0).next?.orchestrator).toBe('off')
   expect(applyArgs('orchestrator maybe', DEFAULT_OPTIONS, 0).next).toBeNull()
   expect(applyArgs('status', { ...DEFAULT_OPTIONS, orchestrator: 'on' }, 0).text).toMatch(/orchestrator: on/)
@@ -273,6 +273,8 @@ test('an agent whose definition cannot be read is left to the engine, not routed
 test('orchestrator on: the main model is never rerouted; off, it is', async ($, on) => {
   const seen = world(on)
   await $.session.start({ cwd: CWD, surface: 'desktop', isInteractive: true })
+  // on is the default: this test starts from off
+  await $.command.run({ command: 'cr-orchestrator', args: 'off', ...CMD })
   const heavy = 'plan the architecture and debug the token check across modules'
   await $.turn.start({ turnId: 't1', text: heavy })
   for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-sonnet-5-5', effort: 'medium', messageCount: 1 })) { /* drain */ }
@@ -286,6 +288,7 @@ test('orchestrator on: the main model is never rerouted; off, it is', async ($, 
 test('under a locked parent a sub-agent nothing sets inherits it; with the orchestrator on it is routed', async ($, on) => {
   const seen = world(on)
   await $.session.start({ cwd: CWD, surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'cr-orchestrator', args: 'off', ...CMD })
   await $.turn.start({ turnId: 't1', text: 'split the task' })
   const brief = { ...SPAWN, subagentType: 'general-purpose', prompt: 'write the tests for the login flow', description: 'write tests', parentModel: 'claude-fable-5-2' }
   await $.agent.spawn(brief)
@@ -541,6 +544,7 @@ test('guard: a sub-agent is never blocked', async ($, on) => {
 test('guard: nothing is blocked when the orchestrator is off or hands on', async ($, on) => {
   world(on)
   await $.session.start({ cwd: CWD, surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'cr-orchestrator', args: 'off', ...CMD })
   await $.turn.start({ turnId: 't1', text: 'do the task' })
   expect((await $.tool.call(EDIT)).deny).toBeUndefined()
   await $.command.run({ command: 'cr-orchestrator', args: 'hands on', ...CMD })

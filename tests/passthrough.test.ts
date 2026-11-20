@@ -83,6 +83,7 @@ test('a subagent of a locked session inherits the model and stays on it', async 
     sent = `${e.model}/${e.effort}`
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
   })
+  await $.command.run({ command: 'cr-orchestrator', args: 'off', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
   await $.turn.start({ turnId: 't1', text: 'map the routes' })
   await $.agent.spawn({
     tool_use_id: 'u1', prompt: 'find where the routes are defined', description: 'Map the routes', subagentType: 'Explore',
