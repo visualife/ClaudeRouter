@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { Agent, Effort, Model, Route, Task, Who } from '../types'
 import { JEV_TIMEOUT_MS, type JevPick, askJev } from './jev'
-import { DEFAULT_OPTIONS, OPTION_ALIASES, OPTION_COMMANDS, WARM_EVERY_MS, applyArgs, normalize, sizeText } from './options'
+import { DEFAULT_OPTIONS, OPTION_ALIASES, OPTION_COMMANDS, WARM_AUTO, WARM_DEFAULT_MS, WARM_EVERY_MS, WARM_MAX_MS, applyArgs, normalize, sizeText } from './options'
 import { type Pin, directiveOf, guard, managerVerdict, toLevel } from './guard'
 import { type End, type Line, type LogPaths, REVIEW_AGENT, blockLine, dateOf, endLine, fallbackLine, followLine, fromJsonl, launchLine, logPaths, mainLine, mcpLine, mdOf, probeLine, projectName, reviewPrompt, sessionLine, skillLine, skillsNamed, stamp, taskLine, toJsonl, verdictLine, verdictOf, warmLine, workflowLine } from './sessionlog'
 import { type EnvFacts, type Front, type Io, agentDirs, costOf, deckText, effortForHeld, envFacts, envWarnings, findFront, isBuiltin, isRouted, mergePrices, parsePrices, pricesEmpty, whoSets } from './orchestrate'
@@ -56,6 +56,19 @@ const BUSY_STUCK_MS = 20 * 60 * 1000
 const skipLogged = new Set<string>()
 let skipPeriod: number | null = null
 let idleSince: number | null = null
+// Keep-warm window events in the log: t 'warm' with an `event` field (armed, closed, ping-failed, skipped, heartbeat).
+// Ping and skip lines (no `event`) keep their shape. Only counts, timings and reason codes, never text.
+const HEARTBEAT_MS = 10 * 60 * 1000
+let lastHeartbeatAt: number | null = null
+// The warmUntil whose end was already logged as a closed event
+let closedLogged = 0
+// Auto-arm: the deadline of the window the router opened itself (0 = none; a manual /cr-warm clears it, so only an auto window rolls),
+// and whether /cr-warm off ended auto-arm for this session
+let autoUntil = 0
+let autoOff = false
+const warmEvent = (at: number, n: number, event: string, facts: Record<string, string | number | boolean>): Line => ({ t: 'warm', at, n, event, ...facts })
+// An error's class name only, never its message
+const errorClass = (err: unknown): string => (err instanceof Error ? err.name : typeof err).replace(/[^\w.-]/g, '').slice(0, 40) || 'unknown'
 // Fable is out of usage: until this time (ms) every Fable request is sent as Opus. The model id the main thread last sent
 // says which model a rate-limit failure belongs to.
 let fableOut: { until: number; clock: string; note: string } | null = null
@@ -272,6 +285,8 @@ export const register: Register = on => {
     skipLogged.clear()
     skipPeriod = null
     idleSince = null
+    autoUntil = 0
+    autoOff = false
     await $.command.register({ name: 'cr', description: 'Open ClaudeRouter: cost, tokens, time, running and finished agents', immediate: true })
     await $.command.register({ name: 'cr-log', description: 'ClaudeRouter: this session\'s log as a table (/cr-log last: the previous session\'s)', immediate: true })
     await $.command.register({ name: 'cr-review', description: 'ClaudeRouter: review the last n session logs of this project (default 10) with one Sonnet agent', immediate: true })
@@ -388,6 +403,26 @@ export const register: Register = on => {
       if (lastRequestAt === null && idleSince === null) idleSince = now
       const idleFrom = lastRequestAt ?? idleSince ?? now
       if (skipPeriod !== idleFrom) { skipLogged.clear(); skipPeriod = idleFrom }
+      // A window that ran out of time is logged once, by the first tick that sees it (a failed ping or /cr-warm off logs its own)
+      if (warmUntil > 0 && warmUntil <= now && closedLogged !== warmUntil) {
+        closedLogged = warmUntil
+        lastHeartbeatAt = null
+        await emit($, warmEvent(now, taskNo, 'closed', { reason: 'deadline', until: warmUntil }))
+      }
+      if (warmUntil > now && !busy) {
+        // Heartbeat: every 10 min while the window is open and idle, so a missing ping can be told from a dead tick
+        if (lastHeartbeatAt === null) lastHeartbeatAt = now
+        else if (now - lastHeartbeatAt >= HEARTBEAT_MS) {
+          lastHeartbeatAt = now
+          await emit($, warmEvent(now, taskNo, 'heartbeat', {
+            alive: true,
+            idleSec: Math.max(0, Math.round((now - idleFrom) / 1000)),
+            secToNextPing: Math.max(0, Math.round((idleFrom + WARM_EVERY_MS - now) / 1000)),
+            minutesLeft: Math.round((warmUntil - now) / 60_000),
+            hasRequest: lastRequestAt !== null,
+          }))
+        }
+      }
       // The ping is due once WARM_EVERY_MS has passed since then; a window that never opened (warm off) has nothing to skip
       const due = now - idleFrom >= WARM_EVERY_MS
       const skip = warmUntil <= now ? (warmUntil > 0 ? 'window-closed' as const : null) : busy ? 'busy' as const : lastRequestAt === null ? 'no-request' as const : null
@@ -399,10 +434,18 @@ export const register: Register = on => {
         }
         return
       }
-      if (!due || warmUntil <= now) return
+      if (!due || warmUntil <= now) {
+        // Not due yet: said once per idle period (the first tick after a ping or a request), then silent
+        if (!due && warmUntil > now && !skipLogged.has('not-due')) {
+          skipLogged.add('not-due')
+          await emit($, warmEvent(now, taskNo, 'skipped', { reason: 'not-due', secToNextPing: Math.max(0, Math.round((idleFrom + WARM_EVERY_MS - now) / 1000)), minutesLeft: Math.round((warmUntil - now) / 60_000) }))
+        }
+        return
+      }
       // The fork re-sends the main thread's last request (its model, effort, system, tools) with the prompt after it:
       // it takes no model or effort of its own, so it shares the main cache by construction
-      const reply = await $.model.fork({ prompt: 'Reply with the single word: warm' }).catch(() => null)
+      let failure = null as unknown
+      const reply = await $.model.fork({ prompt: 'Reply with the single word: warm' }).catch((err: unknown) => { failure = err ?? 'unknown'; return null })
       // A failed ping ends the window: the cache is probably gone, and retrying would only pay to write it again
       const ok = Boolean(reply?.isAnswered)
       // The log keeps the time, the minutes left in the window and the fork's token counts, never the ping's text.
@@ -412,8 +455,13 @@ export const register: Register = on => {
         ? { cached: u.cache_read_input_tokens ?? 0, written: u.cache_creation_input_tokens ?? 0, in: u.input_tokens ?? 0, out: u.output_tokens ?? 0, model: lastMainModel }
         : { usage: 'none' as const, model: lastMainModel }
       await emit($, warmLine(now, taskNo, { minutesLeft: (warmUntil - now) / 60_000, ok, ...counts }))
-      if (!ok) await update($, options, o => ({ ...o, warmUntil: 0 }))
-      else lastRequestAt = now
+      if (!ok) {
+        await emit($, warmEvent(now, taskNo, 'ping-failed', { error: failure === null ? 'not-answered' : errorClass(failure) }))
+        await emit($, warmEvent(now, taskNo, 'closed', { reason: 'failed-ping', until: warmUntil }))
+        lastHeartbeatAt = null
+        autoUntil = 0
+        await update($, options, o => ({ ...o, warmUntil: 0 }))
+      } else lastRequestAt = now
     })
     return next(e)
   })
@@ -439,6 +487,19 @@ export const register: Register = on => {
         return { text: next.orchestrator === 'on' ? `orchestrator: on · manager only · rules loaded (${sizeText(size)})` : `orchestrator: hands on · guard off · rules loaded (${sizeText(size)})` }
       }
       if (next) await update($, options, () => next)
+      // Keep-warm window armed, re-armed or closed by hand: one event line
+      if (sub === 'warm' && next) {
+        // A command takes the window over from auto-arm; "off" also ends auto-arm for the rest of the session
+        autoUntil = 0
+        if (e.args.trim().toLowerCase() === 'off') autoOff = true
+        if (next.warmUntil > now) {
+          lastHeartbeatAt = now
+          await emit($, warmEvent(now, taskNo, 'armed', { via: 'command', until: next.warmUntil, minutes: Math.round((next.warmUntil - now) / 60_000) }))
+        } else if (current.warmUntil > now) {
+          lastHeartbeatAt = null
+          await emit($, warmEvent(now, taskNo, 'closed', { reason: 'off', until: current.warmUntil }))
+        }
+      }
       // /cr-fable reset and /cr-fable off: the fallback ends now
       if (sub === 'fable' && ['reset', 'off'].includes(e.args.trim().toLowerCase())) {
         fableOut = null
@@ -638,6 +699,26 @@ export const register: Register = on => {
     if (!e.agentId) {
       lastRequestAt = await $.clock.now()
       lastStepAt = lastRequestAt
+      // Auto-arm: a real main-thread request opens a window when none is open and /cr-warm off did not end auto-arm.
+      // An auto window rolls: each request pushes the deadline to now + WARM_DEFAULT_MS (capped at now + WARM_MAX_MS), never back.
+      // A manual window keeps its own deadline, and pings never get here, so they extend nothing.
+      const at = lastRequestAt
+      const until = normalize(await read($, options)).warmUntil
+      if (until <= at) {
+        if (WARM_AUTO && !autoOff) {
+          const armed = at + WARM_DEFAULT_MS
+          autoUntil = armed
+          lastHeartbeatAt = at
+          await update($, options, o => ({ ...o, warmUntil: armed }))
+          await emit($, warmEvent(at, taskNo, 'armed', { via: 'auto', until: armed, minutes: Math.round(WARM_DEFAULT_MS / 60_000) }))
+        }
+      } else if (autoUntil > 0 && until === autoUntil) {
+        const rolled = Math.min(Math.max(until, at + WARM_DEFAULT_MS), at + WARM_MAX_MS)
+        if (rolled > until) {
+          autoUntil = rolled
+          await update($, options, o => ({ ...o, warmUntil: rolled }))
+        }
+      }
     }
     // Pass-through: the request keeps the model and effort it arrived with, and the band says why.
     //  - orchestrator mode, or a model lock (Fable by default), or an id the router does not know: a main-thread

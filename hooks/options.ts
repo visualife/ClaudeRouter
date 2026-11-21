@@ -48,15 +48,22 @@ export function warmEveryMin(raw: string | undefined): number {
 }
 const envMin = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.CR_WARM_EVERY_MIN
 export const WARM_EVERY_MS = warmEveryMin(envMin) * 60 * 1000
-const WARM_DEFAULT_MS = 2 * 60 * 60 * 1000
-const WARM_MAX_MS = 8 * 60 * 60 * 1000
+export const WARM_DEFAULT_MS = 2 * 60 * 60 * 1000
+export const WARM_MAX_MS = 8 * 60 * 60 * 1000
+// Auto-arm: the first real main-thread request of a session opens a window (WARM_DEFAULT_MS), and each later request rolls it on.
+// On by default; CR_WARM_AUTO=0 (or off, false) turns it off, anything else, unset or unreadable leaves it on.
+export function warmAuto(raw: string | undefined): boolean {
+  return !['0', 'off', 'false'].includes((raw ?? '').trim().toLowerCase())
+}
+const envAuto = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.CR_WARM_AUTO
+export const WARM_AUTO = warmAuto(envAuto)
 
 export const USAGE = [
   '/cr                 open the pane, and bring back a closed band',
   '/cr-engine jev      let Jev pick the model tier (needs TYPESAFE_API_KEY)',
   '/cr-engine rules    use the local keyword rules (default)',
-  '/cr-warm [2h]       keep the prompt cache warm for 2h (max 8h)',
-  '/cr-warm off        stop keeping it warm (/cr-kw is the short form)',
+  '/cr-warm [2h]       keep the prompt cache warm for 2h (max 8h); it is armed on its own by your first request (CR_WARM_AUTO=0 stops that)',
+  '/cr-warm off        stop keeping it warm and do not re-arm on its own for the rest of the session (/cr-kw is the short form)',
   '/cr-pin sonnet [medium]  force a model (and effort) from the next request, even mid-turn',
   '/cr-pin auto        let the router decide again',
   '/cr-pin fable [high]  force Fable (also "@fable ..." for one prompt)',
@@ -135,7 +142,7 @@ export function applyArgs(args: string, o: Options, now: number): { next: Option
       if (arg !== 'jev' && arg !== 'rules') return { next: null, text: `engine takes jev or rules\n${USAGE}` }
       return { next: { ...o, engine: arg }, text: `engine: ${arg}` }
     case 'warm': {
-      if (arg === 'off') return { next: { ...o, warmUntil: 0 }, text: 'keep-warm: off' }
+      if (arg === 'off') return { next: { ...o, warmUntil: 0 }, text: 'keep-warm: off (auto-arm off for this session)' }
       const ms = arg ? parseWindow(arg) : WARM_DEFAULT_MS
       if (ms === null) return { next: null, text: `warm takes a duration like 90m or 2h, or off\n${USAGE}` }
       return { next: { ...o, warmUntil: now + ms }, text: `keep-warm: on for ${Math.round(ms / 60_000)} min, a ping every ${WARM_EVERY_MS / 60_000} min while idle` }

@@ -343,7 +343,8 @@ test('each keep-warm ping is logged with the time and minutes left, never its te
   for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-sonnet-5-5', effort: 'low', messageCount: 1 })) { /* drain */ }
   await $.turn.complete({ turnId: 't1', reason: 'answer', isAborted: false, durationMs: 300, answer: '', usage })
   for (let left = WARM_EVERY_MS / 60_000 + 1; left > 0; left -= 10) await clock.advance(Math.min(left, 10) * 60_000)
-  const warm = linesOf(written).filter(l => l.t === 'warm')
+  // ping lines only: the window events (armed, heartbeat...) carry an `event` field
+  const warm = linesOf(written).filter(l => l.t === 'warm' && l.event === undefined)
   expect(warm).toHaveLength(1)
   expect(Object.keys(warm[0] ?? {}).sort()).toEqual(['at', 'cached', 'in', 'minutesLeft', 'model', 'n', 'ok', 'out', 't', 'written'])
   expect(Number(warm[0]?.minutesLeft)).toBeGreaterThan(100)
