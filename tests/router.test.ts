@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
 import { askJev } from '../hooks/jev'
-import { applyArgs, DEFAULT_OPTIONS } from '../hooks/options'
+import { applyArgs, DEFAULT_OPTIONS, WARM_EVERY_MS } from '../hooks/options'
 import { carriesOn, pickRoute, roleOf } from '../hooks/route'
 
 const PLUGIN = 'agent-ClaudeRouter'
@@ -206,7 +206,7 @@ test('/cr: options: engine and keep-warm', () => {
   expect(applyArgs('warm soon', DEFAULT_OPTIONS, 0).next).toBe(null)
 })
 
-// Keep-warm on the mock clock: the ping goes out after 50 idle minutes, and a failed one closes the window
+// Keep-warm on the mock clock: the ping goes out after one idle interval (WARM_EVERY_MS), and a failed one closes the window
 async function warmWorld($: any, on: On, answers: boolean[]) {
   const clock = world(on)
   let forks = 0
@@ -234,21 +234,23 @@ async function idle(clock: { advance: (ms: number) => Promise<void> }, minutes: 
   for (let left = minutes; left > 0; left -= 10) await clock.advance(Math.min(left, 10) * MIN)
 }
 
-test('keep-warm pings the cache after 50 idle minutes, then every 50 more', { timeoutMs: 120_000 }, async ($, on) => {
+const EVERY = WARM_EVERY_MS / MIN
+
+test('keep-warm pings the cache after one idle interval, then every interval more', { timeoutMs: 120_000 }, async ($, on) => {
   const { clock, forks } = await warmWorld($, on, [])
-  await idle(clock, 40)
+  await idle(clock, EVERY - 1)
   expect(forks()).toBe(0)
-  await idle(clock, 11)
+  await idle(clock, 2)
   expect(forks()).toBe(1)
-  await idle(clock, 30)
+  await idle(clock, EVERY - 2)
   expect(forks()).toBe(1)
-  await idle(clock, 21)
+  await idle(clock, 3)
   expect(forks()).toBe(2)
 })
 
 test('a failed ping closes the keep-warm window', { timeoutMs: 120_000 }, async ($, on) => {
   const { clock, forks } = await warmWorld($, on, [false])
-  await idle(clock, 51)
+  await idle(clock, EVERY + 1)
   expect(forks()).toBe(1)
   await idle(clock, 120)
   expect(forks()).toBe(1)

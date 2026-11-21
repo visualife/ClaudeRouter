@@ -36,8 +36,18 @@ export function normalize(saved: Partial<Options> & { fableLock?: boolean }): Op
   const locks = rest.locks ?? (fableLock === false ? [] : DEFAULT_OPTIONS.locks)
   return { ...DEFAULT_OPTIONS, ...rest, locks }
 }
-// A ping every 50 minutes keeps a one-hour prompt cache read instead of re-written
-export const WARM_EVERY_MS = 50 * 60 * 1000
+// The default prompt cache lives 5 minutes, so a ping every 4 minutes lands inside it and the cache is read, not re-written.
+// With a 1-hour cache set CR_WARM_EVERY_MIN=50. Minutes, a number; invalid or under 1 falls back to the default, over 55 is capped at 55.
+export const WARM_DEFAULT_EVERY_MIN = 4
+export const WARM_MAX_EVERY_MIN = 55
+export function warmEveryMin(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return WARM_DEFAULT_EVERY_MIN
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n < 1) return WARM_DEFAULT_EVERY_MIN
+  return Math.min(n, WARM_MAX_EVERY_MIN)
+}
+const envMin = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.CR_WARM_EVERY_MIN
+export const WARM_EVERY_MS = warmEveryMin(envMin) * 60 * 1000
 const WARM_DEFAULT_MS = 2 * 60 * 60 * 1000
 const WARM_MAX_MS = 8 * 60 * 60 * 1000
 
@@ -128,7 +138,7 @@ export function applyArgs(args: string, o: Options, now: number): { next: Option
       if (arg === 'off') return { next: { ...o, warmUntil: 0 }, text: 'keep-warm: off' }
       const ms = arg ? parseWindow(arg) : WARM_DEFAULT_MS
       if (ms === null) return { next: null, text: `warm takes a duration like 90m or 2h, or off\n${USAGE}` }
-      return { next: { ...o, warmUntil: now + ms }, text: `keep-warm: on for ${Math.round(ms / 60_000)} min, a ping every 50 min while idle` }
+      return { next: { ...o, warmUntil: now + ms }, text: `keep-warm: on for ${Math.round(ms / 60_000)} min, a ping every ${WARM_EVERY_MS / 60_000} min while idle` }
     }
     case 'pin': {
       const [m = '', e = ''] = arg.split(/\s+/)

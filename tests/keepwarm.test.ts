@@ -1,6 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
+import { WARM_EVERY_MS, warmEveryMin } from '../hooks/options'
 import { fromJsonl, warmLine } from '../hooks/sessionlog'
 
 // Keep-warm: busy cannot stay stuck, no due ping is skipped silently, and each ping logs what the cache did.
@@ -8,6 +9,8 @@ import { fromJsonl, warmLine } from '../hooks/sessionlog'
 const HOME = 'C:/Users/me'
 const CMD = { origin: { kind: 'composer' as const }, presentation: { isFullscreen: false, columns: 80 } }
 const MIN = 60_000
+// The ping interval in minutes, read from the constant so these tests hold for any CR_WARM_EVERY_MIN
+const EVERY = WARM_EVERY_MS / MIN
 type Reply = Record<string, unknown>
 const WARM_REPLY: Reply = { isAnswered: true, text: 'WARMTEXT', usage: { input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 200_000, cache_creation_input_tokens: 0 } }
 
@@ -60,7 +63,7 @@ test('a failed main turn (StopFailure) no longer holds busy: the ping still goes
   await $.turn.start({ turnId: 't1', text: 'list the files' })
   await step($, 't1')
   await $.classic.StopFailure({ error: 'server_error' } as never)
-  await idle(clock, 51)
+  await idle(clock, EVERY + 1)
   expect(forks()).toBe(1)
 })
 
@@ -70,7 +73,7 @@ test('an aborted main turn.complete clears busy: the ping still goes', { timeout
   await $.turn.start({ turnId: 't1', text: 'list the files' })
   await step($, 't1')
   await $.turn.complete({ turnId: 't1', reason: 'interrupted', isAborted: true, durationMs: 10, answer: '' } as never)
-  await idle(clock, 51)
+  await idle(clock, EVERY + 1)
   expect(forks()).toBe(1)
 })
 
@@ -80,7 +83,7 @@ test('busy held 20 minutes with no main step is cleared: the ping still goes', {
   await $.turn.start({ turnId: 't1', text: 'list the files' })
   await step($, 't1')
   // no turn.complete, no failure
-  await idle(clock, 51)
+  await idle(clock, EVERY + 1)
   expect(forks()).toBe(1)
   expect(warmLines().filter(l => l.skip)).toHaveLength(0)
 })
@@ -91,10 +94,10 @@ test('skip busy: a due ping held by a running turn logs one ok:false line, not o
   await $.turn.start({ turnId: 't0', text: 'first' })
   await step($, 't0')
   await done($, 't0')
-  await idle(clock, 49)
-  // a new turn starts at minute 49 and has not stepped: busy when the 50-minute ping falls due
+  await idle(clock, EVERY - 1)
+  // a new turn starts one minute before the ping falls due and has not stepped: busy when it does
   await $.turn.start({ turnId: 't1', text: 'second' })
-  await idle(clock, 4)
+  await idle(clock, 2)
   expect(forks()).toBe(0)
   expect(warmLines().map(l => [l.ok, l.skip])).toEqual([[false, 'busy']])
   // the safety clears busy 20 minutes after it started and the ping goes
@@ -106,9 +109,9 @@ test('skip busy: a due ping held by a running turn logs one ok:false line, not o
 test('skip no-request: a window open with no main request logs once per idle period', { timeoutMs: 120_000 }, async ($, on) => {
   const { clock, forks, warmLines } = world(on)
   await start($)
-  await idle(clock, 49)
+  await idle(clock, EVERY - 1)
   expect(warmLines()).toHaveLength(0)
-  await idle(clock, 30)
+  await idle(clock, EVERY + 1)
   expect(forks()).toBe(0)
   expect(warmLines().map(l => [l.ok, l.skip])).toEqual([[false, 'no-request']])
 })
@@ -119,14 +122,18 @@ test('skip window-closed: a due ping after the window ended logs once, again onl
   await $.turn.start({ turnId: 't1', text: 'list the files' })
   await step($, 't1')
   await done($, 't1')
-  await idle(clock, 51)
+  await idle(clock, EVERY + 1)
   expect(forks()).toBe(1)
+  // pings go on every EVERY minutes until the 1h window ends, then no more
   await idle(clock, 70)
-  expect(forks()).toBe(1)
+  const sent = forks()
+  expect(sent).toBeGreaterThan(1)
+  await idle(clock, 30)
+  expect(forks()).toBe(sent)
   expect(warmLines().filter(l => l.skip).map(l => l.skip)).toEqual(['window-closed'])
   // a new main request starts a new idle period
   await step($, 't1')
-  await idle(clock, 60)
+  await idle(clock, EVERY + 1)
   expect(warmLines().filter(l => l.skip).map(l => l.skip)).toEqual(['window-closed', 'window-closed'])
 })
 
@@ -143,7 +150,7 @@ test('a ping logs the cache numbers and the main thread model, never its text', 
   await $.turn.start({ turnId: 't1', text: 'list the files' })
   await step($, 't1')
   await done($, 't1')
-  await idle(clock, 51)
+  await idle(clock, EVERY + 1)
   const [line] = warmLines()
   // the router sends this prompt on Haiku: the line names the model the main thread last sent, not the one the step asked for
   expect(line).toMatchObject({ ok: true, cached: 123_456, written: 789, in: 3, out: 2, model: 'claude-haiku-5-5' })
@@ -158,7 +165,7 @@ test('a fork result with no usage logs usage:none', { timeoutMs: 120_000 }, asyn
   await $.turn.start({ turnId: 't1', text: 'list the files' })
   await step($, 't1')
   await done($, 't1')
-  await idle(clock, 51)
+  await idle(clock, EVERY + 1)
   const [line] = warmLines()
   expect(line).toMatchObject({ ok: true, usage: 'none' })
   expect(line).not.toHaveProperty('cached')
@@ -167,4 +174,19 @@ test('a fork result with no usage logs usage:none', { timeoutMs: 120_000 }, asyn
 test('warmLine: skip and usage fields', () => {
   expect(warmLine(1, 2, { minutesLeft: -3, ok: false, skip: 'busy' })).toEqual({ t: 'warm', at: 1, n: 2, minutesLeft: 0, ok: false, skip: 'busy' })
   expect(warmLine(1, 2, { minutesLeft: 10, ok: true, usage: 'none', model: 'm' })).toEqual({ t: 'warm', at: 1, n: 2, minutesLeft: 10, ok: true, usage: 'none', model: 'm' })
+})
+
+test('CR_WARM_EVERY_MIN: default 4, valid value used, invalid or under 1 ignored, capped at 55', () => {
+  expect(warmEveryMin(undefined)).toBe(4)
+  expect(warmEveryMin('')).toBe(4)
+  expect(warmEveryMin('50')).toBe(50)
+  expect(warmEveryMin('2.5')).toBe(2.5)
+  expect(warmEveryMin('abc')).toBe(4)
+  expect(warmEveryMin('0')).toBe(4)
+  expect(warmEveryMin('0.5')).toBe(4)
+  expect(warmEveryMin('-3')).toBe(4)
+  expect(warmEveryMin('Infinity')).toBe(4)
+  expect(warmEveryMin('120')).toBe(55)
+  // the exported constant is the same value in ms, and the default sits under a 5-minute cache
+  expect(WARM_EVERY_MS).toBe(warmEveryMin(process.env.CR_WARM_EVERY_MIN) * MIN)
 })

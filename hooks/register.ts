@@ -376,7 +376,7 @@ export const register: Register = on => {
       // The seconds counters are Text, which a blit does not reach: redraw once a second
       if (frame % 10 === 0) $.ui.invalidate('ui.render')
     })
-    // Keep-warm: once a minute, ping the cache if the window is open and the main thread has been idle for 50 min
+    // Keep-warm: once a minute, ping the cache if the window is open and the main thread has been idle for WARM_EVERY_MS (4 min by default)
     $.clock.every(60_000, async () => {
       const now = await $.clock.now()
       const { warmUntil } = await read($, options)
@@ -388,7 +388,7 @@ export const register: Register = on => {
       if (lastRequestAt === null && idleSince === null) idleSince = now
       const idleFrom = lastRequestAt ?? idleSince ?? now
       if (skipPeriod !== idleFrom) { skipLogged.clear(); skipPeriod = idleFrom }
-      // The ping is due once 50 min have passed since then; a window that never opened (warm off) has nothing to skip
+      // The ping is due once WARM_EVERY_MS has passed since then; a window that never opened (warm off) has nothing to skip
       const due = now - idleFrom >= WARM_EVERY_MS
       const skip = warmUntil <= now ? (warmUntil > 0 ? 'window-closed' as const : null) : busy ? 'busy' as const : lastRequestAt === null ? 'no-request' as const : null
       if (skip) {

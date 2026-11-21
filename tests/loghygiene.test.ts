@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
 import { managerVerdict } from '../hooks/guard'
-import { DEFAULT_OPTIONS } from '../hooks/options'
+import { DEFAULT_OPTIONS, WARM_EVERY_MS } from '../hooks/options'
 import { blockLine, commandWords, fromJsonl, launchLine, skillsNamed, stamp, toJsonl, verdictOf, warmLine } from '../hooks/sessionlog'
 
 // Session-log hygiene, the manager guard's own-folder writes, the band's warnings, and the orchestrator default.
@@ -342,7 +342,7 @@ test('each keep-warm ping is logged with the time and minutes left, never its te
   await $.turn.start({ turnId: 't1', text: 'list the files' })
   for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-sonnet-5-5', effort: 'low', messageCount: 1 })) { /* drain */ }
   await $.turn.complete({ turnId: 't1', reason: 'answer', isAborted: false, durationMs: 300, answer: '', usage })
-  for (let left = 51; left > 0; left -= 10) await clock.advance(Math.min(left, 10) * 60_000)
+  for (let left = WARM_EVERY_MS / 60_000 + 1; left > 0; left -= 10) await clock.advance(Math.min(left, 10) * 60_000)
   const warm = linesOf(written).filter(l => l.t === 'warm')
   expect(warm).toHaveLength(1)
   expect(Object.keys(warm[0] ?? {}).sort()).toEqual(['at', 'cached', 'in', 'minutesLeft', 'model', 'n', 'ok', 'out', 't', 'written'])
