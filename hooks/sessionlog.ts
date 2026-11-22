@@ -198,12 +198,26 @@ export const dateOf = (at: number): string => stamp(at).slice(0, 10)
 
 export const projectName = (cwd: string): string => clip(cwd.split(/[\\/]/).filter(Boolean).pop() ?? 'project', 60).replace(/[^\w.-]+/g, '_') || 'project'
 
-export type LogPaths = { dir: string; jsonl: string; md: string }
-export function logPaths(home: string, cwd: string, at: number, sessionId: string): LogPaths {
-  const dir = `${home.split('\\').join('/').replace(/\/+$/, '')}/.claude/cr-logs/${projectName(cwd)}`
-  const name = `${stamp(at)}-${clip(sessionId, 40).replace(/[^\w-]+/g, '_') || 'session'}`
-  return { dir, jsonl: `${dir}/${name}.jsonl`, md: `${dir}/${name}.md` }
-}
+// One common log per project: every row carries the id of its session ("sid"), so readers filter by session.
+// dir holds cr-log.jsonl and cr-log.md; reviews is where /cr-review writes.
+export type LogPaths = { dir: string; jsonl: string; md: string; reviews: string }
+const slash = (p: string) => p.split('\\').join('/').replace(/\/+$/, '')
+export const pathsIn = (dir: string, reviews: string): LogPaths => ({ dir, jsonl: `${dir}/cr-log.jsonl`, md: `${dir}/cr-log.md`, reviews })
+// The project's own log: <cwd>/.claude/cr-log.jsonl, reviews in <cwd>/.claude/cr-reviews
+export const projectLogPaths = (cwd: string): LogPaths => pathsIn(`${slash(cwd)}/.claude`, `${slash(cwd)}/.claude/cr-reviews`)
+// The old home: ~/.claude/cr-logs/<project>/ (the fallback; its per-session files from earlier versions stay there)
+export const legacyDir = (home: string, cwd: string): string => `${slash(home)}/.claude/cr-logs/${projectName(cwd)}`
+export const legacyLogPaths = (home: string, cwd: string): LogPaths => pathsIn(legacyDir(home, cwd), `${legacyDir(home, cwd)}/reviews`)
+// CR_LOG_DIR (an absolute folder) holds cr-log.jsonl and cr-log.md and wins over everything
+export const envLogPaths = (dir: string): LogPaths => pathsIn(slash(dir), `${slash(dir)}/reviews`)
+export const isAbsoluteDir = (dir: string): boolean => /^([A-Za-z]:)?[\\/]/.test(dir.trim())
+// A temp or spare-* folder is not a project: its log goes to the home fallback until a turn reports the real folder
+export const isTempCwd = (cwd: string): boolean => /^spare-/i.test(slash(cwd).split('/').pop() ?? '') || /(^|\/)(temp|tmp)(\/|$)/i.test(slash(cwd))
+// The session ids of a log's rows, oldest first
+export const sessionIds = (rows: readonly Line[]): string[] => [...new Set(rows.map(r => (typeof r.sid === 'string' ? r.sid : '')).filter(Boolean))]
+export const rowsOf = (rows: readonly Line[], sid: string): Line[] => rows.filter(r => r.sid === sid)
+// The readable view of a whole log: one block per session, newest last
+export const mdAll = (rows: readonly Line[], now?: number): string => sessionIds(rows).map(sid => mdOf(rowsOf(rows, sid), now).replace(/^(# .*)$/m, head => `${head} · ${sid}`)).join('\n---\n\n')
 
 export const toJsonl = (lines: readonly Line[]): string => lines.map(l => JSON.stringify(l)).join('\n') + (lines.length > 0 ? '\n' : '')
 export function fromJsonl(text: string): Line[] {
@@ -316,10 +330,11 @@ export function mdOf(lines: readonly Line[], now?: number): string {
 export const REVIEW_AGENT = 'log-review'
 
 // The brief of the review agent. It names the files it may read; the hook refuses every other path.
-export function reviewPrompt(files: readonly string[], project: string): string {
+export function reviewPrompt(files: readonly string[], project: string, sessions: readonly string[] = []): string {
   return [
     `Review the ClaudeRouter session logs of the project "${project}". Read only these ${files.length} files (JSON lines, one event per line), nothing else:`,
     ...files.map(f => `- ${f}`),
+    ...(sessions.length > 0 ? ['', `The file holds every session of the project. Every line has a sid field: use only lines whose sid is one of these ${sessions.length}: ${sessions.join(', ')}.`] : []),
     '',
     'Line types (field t): session (phase start|end), task (n, text, mode), agent (n, id, agent, model, effort, by{model,effort}, brief, skills = named in the brief), end (n, id, agent, model, in, cached, out, cost|null, sec, turns, end = ended|maxTurns|failed), main (n, model, in, cached, out, cost|null, sec), skill (agent, id, skill, named = the brief named it), mcp (agent, server, tool), block (tool, target, agent = the agent the guard suggested), followup (n, agent = the agent the orchestrator sent back), verdict (id, verdict pass|fail|not checked|cut), warm (minutesLeft, ok, skip = busy|no-request|window-closed when a due ping was not sent, cached = cache-read tokens and written = cache-write tokens of the ping, in, out, model, usage none when the fork reported no usage).',
     '',

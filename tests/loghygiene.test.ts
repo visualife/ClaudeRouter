@@ -44,6 +44,7 @@ function world(on: On, files: Record<string, string> = FILES, sessionId: string 
     return { value: text }
   })
   on('fs.write', (_$, e) => { written[e.path.split('\\').join('/')] = e.text; return { value: undefined } })
+  on('fs.exists', (_$, e) => ({ value: (written[e.path.split('\\').join('/')] ?? files[e.path.split('\\').join('/')]) !== undefined }))
   on('fs.list', (_$, e) => {
     const dir = e.path.split('\\').join('/').replace(/\/+$/, '')
     return { value: Object.keys(written).filter(p => p.startsWith(`${dir}/`) && !p.slice(dir.length + 1).includes('/')).map(p => ({ name: p.slice(dir.length + 1), kind: 'file', size: 1, mtimeMs: 0, isLink: false })) }
@@ -298,16 +299,20 @@ test('junk records: no empty task, no zero main line', async ($, on) => {
   expect(lines.filter(l => l.t === 'main')[0]).toMatchObject({ n: 1, in: 10, out: 5 })
 })
 
-test('one file per session: a log of the same session id is continued', async ($, on) => {
+test('one log per project: the rows of the same session id are continued, other sessions rows are kept', async ($, on) => {
   const { written } = world(on)
-  const earlier = `${HOME}/.claude/cr-logs/site/2026-11-17-1000-sess-1.jsonl`
-  written[earlier] = toJsonl([{ t: 'session', at: 1, phase: 'start', project: 'site', mode: 'off' }, { t: 'task', at: 2, n: 1, text: 'first', mode: 'off' }])
-  // a different session's file must not be taken
-  written[`${HOME}/.claude/cr-logs/site/2026-11-17-1100-other-sess-1.jsonl`] = toJsonl([{ t: 'session', at: 1, phase: 'start', project: 'site', mode: 'off' }])
+  const log = 'C:/work/site/.claude/cr-log.jsonl'
+  written[log] = toJsonl([
+    { t: 'session', at: 1, phase: 'start', project: 'site', mode: 'off', sid: 'sess-1' },
+    { t: 'task', at: 2, n: 1, text: 'first', mode: 'off', sid: 'sess-1' },
+    { t: 'session', at: 1, phase: 'start', project: 'site', mode: 'off', sid: 'other-sess-1' },
+  ])
   await $.session.start({ cwd: 'C:/work/site', surface: 'desktop', isInteractive: true })
   await $.turn.start({ turnId: 't1', text: 'second' })
-  expect(jsonls(written)).toHaveLength(2)
-  expect(linesOf(written, earlier).filter(l => l.t === 'task').map(l => [l.n, l.text])).toEqual([[1, 'first'], [2, 'second']])
+  expect(jsonls(written)).toEqual([log])
+  const rows = linesOf(written, log)
+  expect(rows.filter(l => l.sid === 'sess-1' && l.t === 'task').map(l => [l.n, l.text])).toEqual([[1, 'first'], [2, 'second']])
+  expect(rows.filter(l => l.sid === 'other-sess-1')).toHaveLength(1)
 })
 
 test('a spare-* session moves under the real project name, and its report is written before the session ends', async ($, on) => {
@@ -316,14 +321,14 @@ test('a spare-* session moves under the real project name, and its report is wri
   expect(jsonls(written)[0]).toContain('/cr-logs/spare-ab12/')
   await $.turn.start({ turnId: 't1', text: 'work', cwd: 'C:/work/site' } as never)
   await $.turn.complete({ turnId: 't1', reason: 'answer', isAborted: false, durationMs: 10, answer: '', usage })
-  const real = jsonls(written).find(p => p.includes('/cr-logs/site/'))
-  expect(real).toBeDefined()
+  const real = 'C:/work/site/.claude/cr-log.jsonl'
+  expect(written[real]).toBeDefined()
   expect(linesOf(written, real)[0]).toMatchObject({ t: 'session', project: 'site' })
   expect(linesOf(written, real).some(l => l.t === 'task')).toBe(true)
   // the old file is emptied, not duplicated
   expect(linesOf(written, jsonls(written).find(p => p.includes('/spare-ab12/'))).length).toBe(0)
   // no session.end yet: the .md is already there
-  expect(Object.keys(written).some(p => p.includes('/cr-logs/site/') && p.endsWith('.md'))).toBe(true)
+  expect(written['C:/work/site/.claude/cr-log.md']).toBeDefined()
 })
 
 test('a spare session with no cwd on its turns keeps its name and still gets an .md at the end', async ($, on) => {
@@ -427,47 +432,43 @@ test('/cr-orchestrator off still works after the default-on start', async ($, on
 
 const NOW = Date.UTC(2026, 10, 18, 9, 30)
 
-test('a spare session moving into a project that already has a log of the same session loses no record', async ($, on) => {
+test('a spare session moving into a project that already has rows of the same session loses no record', async ($, on) => {
   const { written } = world(on)
-  const earlier = `${HOME}/.claude/cr-logs/site/${stamp(NOW)}-sess-1.jsonl`
-  written[earlier] = toJsonl([{ t: 'session', at: 1, phase: 'start', project: 'site', mode: 'off' }, { t: 'task', at: 2, n: 1, text: 'first', mode: 'off' }])
+  const log = 'C:/work/site/.claude/cr-log.jsonl'
+  written[log] = toJsonl([{ t: 'session', at: 1, phase: 'start', project: 'site', mode: 'off', sid: 'sess-1' }, { t: 'task', at: 2, n: 1, text: 'first', mode: 'off', sid: 'sess-1' }])
   await $.session.start({ cwd: 'C:/Temp/spare-ab12', surface: 'desktop', isInteractive: true })
   await $.turn.start({ turnId: 't1', text: 'second', cwd: 'C:/work/site' } as never)
-  const lines = linesOf(written, earlier)
+  const lines = linesOf(written, log)
   expect(lines.filter(l => l.t === 'task').map(l => [l.n, l.text])).toEqual([[1, 'first'], [2, 'second']])
   expect(lines.filter(l => l.t === 'session' && l.phase === 'start')).toHaveLength(2)
   // the spare file is emptied, not the target; a later turn continues the numbering
   expect(linesOf(written, jsonls(written).find(p => p.includes('/spare-ab12/'))).length).toBe(0)
   await $.turn.start({ turnId: 't2', text: 'third' })
-  expect(linesOf(written, earlier).filter(l => l.t === 'task').map(l => l.n)).toEqual([1, 2, 3])
+  expect(linesOf(written, log).filter(l => l.t === 'task').map(l => l.n)).toEqual([1, 2, 3])
 })
 
-test('a spare session moving where a file of its own name exists but cannot be read keeps both files', async ($, on) => {
+test('a project log with a half-written line is appended to, not rewritten', async ($, on) => {
   const { written } = world(on)
-  const taken = `${HOME}/.claude/cr-logs/site/${stamp(NOW)}-sess-1.jsonl`
-  written[taken] = `${JSON.stringify({ t: 'task', at: 2, n: 1, text: 'first', mode: 'off' })}\n{half a line`
-  const before = written[taken]
+  const log = 'C:/work/site/.claude/cr-log.jsonl'
+  const before = `${JSON.stringify({ t: 'task', at: 2, n: 1, text: 'first', mode: 'off', sid: 'x' })}\n{half a line`
+  written[log] = before
   await $.session.start({ cwd: 'C:/Temp/spare-ab12', surface: 'desktop', isInteractive: true })
   await $.turn.start({ turnId: 't1', text: 'second', cwd: 'C:/work/site' } as never)
-  expect(written[taken]).toBe(before)
-  const spare = jsonls(written).find(p => p.includes('/spare-ab12/'))
-  expect(linesOf(written, spare).some(l => l.t === 'task' && l.text === 'second')).toBe(true)
+  expect(written[log]?.startsWith(before)).toBe(true)
+  expect(linesOf(written, log).some(l => l.t === 'task' && l.text === 'second')).toBe(true)
 })
 
-test('with no readable session id the log is a new stamped file, never an earlier one', async ($, on) => {
+test('with no readable session id the session gets an id of its own and never continues an earlier one', async ($, on) => {
   const { written } = world(on, FILES, null)
-  const earlier = `${HOME}/.claude/cr-logs/site/2026-11-17-1000-session.jsonl`
-  const sameMinute = `${HOME}/.claude/cr-logs/site/${stamp(NOW)}-session.jsonl`
-  const before = toJsonl([{ t: 'task', at: 2, n: 1, text: 'first', mode: 'off' }])
-  written[earlier] = before
-  written[sameMinute] = before
+  const log = 'C:/work/site/.claude/cr-log.jsonl'
+  const before = toJsonl([{ t: 'task', at: 2, n: 1, text: 'first', mode: 'off', sid: 'session' }])
+  written[log] = before
   await $.session.start({ cwd: 'C:/work/site', surface: 'desktop', isInteractive: true })
   await $.turn.start({ turnId: 't1', text: 'second' })
-  expect(written[earlier]).toBe(before)
-  expect(written[sameMinute]).toBe(before)
-  const fresh = jsonls(written).filter(p => p !== earlier && p !== sameMinute)
-  expect(fresh).toHaveLength(1)
-  expect(linesOf(written, fresh[0]).filter(l => l.t === 'task').map(l => l.text)).toEqual(['second'])
+  expect(written[log]?.startsWith(before)).toBe(true)
+  const mine = linesOf(written, log).filter(l => l.sid !== 'session')
+  expect(mine.filter(l => l.t === 'task').map(l => [l.n, l.text])).toEqual([[1, 'second']])
+  expect(String(mine[0]?.sid)).toMatch(/^session-/)
 })
 
 test('a resumed conversation that already holds the rules does not get them again', async ($, on) => {

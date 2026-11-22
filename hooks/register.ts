@@ -4,7 +4,7 @@ import type { Agent, Effort, Model, Route, Task, Who } from '../types'
 import { JEV_TIMEOUT_MS, type JevPick, askJev } from './jev'
 import { DEFAULT_OPTIONS, OPTION_ALIASES, OPTION_COMMANDS, WARM_AUTO, WARM_DEFAULT_MS, WARM_EVERY_MS, WARM_MAX_MS, applyArgs, normalize, sizeText } from './options'
 import { type Pin, directiveOf, guard, managerVerdict, toLevel } from './guard'
-import { type End, type Line, type LogPaths, REVIEW_AGENT, blockLine, dateOf, endLine, fallbackLine, followLine, fromJsonl, launchLine, logPaths, mainLine, mcpLine, mdOf, probeLine, projectName, reviewPrompt, sessionLine, skillLine, skillsNamed, stamp, taskLine, toJsonl, verdictLine, verdictOf, warmLine, workflowLine } from './sessionlog'
+import { type End, type Line, type LogPaths, REVIEW_AGENT, blockLine, clip, dateOf, endLine, envLogPaths, fallbackLine, followLine, fromJsonl, isAbsoluteDir, isTempCwd, launchLine, legacyDir, legacyLogPaths, mainLine, mcpLine, mdAll, mdOf, pathsIn, probeLine, projectLogPaths, projectName, reviewPrompt, rowsOf, sessionIds, sessionLine, skillLine, skillsNamed, stamp, taskLine, toJsonl, verdictLine, verdictOf, warmLine, workflowLine } from './sessionlog'
 import { type EnvFacts, type Front, type Io, agentDirs, costOf, deckText, effortForHeld, envFacts, envWarnings, findFront, isBuiltin, isRouted, mergePrices, parsePrices, pricesEmpty, whoSets } from './orchestrate'
 import { type Els, type Snapshot, drawBand, drawStrip } from './band'
 import { drawPane } from './pane'
@@ -107,6 +107,12 @@ const HAND_BACK = /^\s*<[^>]*agent-message/i
 // of each running agent. A reload re-reads the file named by the logfile atom.
 let logLines: Line[] = []
 let logPath: LogPaths | null = null
+// This session's id (the key of its rows in the shared log), its project name, whether its log is still in the spare
+// folder, and the CR_LOG_DIR override
+let logSid = 'session'
+let logProject = ''
+let logSpare = false
+let logDirEnv = ''
 let taskNo = 0
 const agentMeta = new Map<string, { n: number; type: string; model: string; named: string[]; maxTurns: number | null; steps: number; handback?: ReturnType<typeof verdictOf> }>()
 // The review agent's job: where its answer is written when it ends
@@ -134,56 +140,117 @@ async function frontOf($: EngineInterface, type: string): Promise<Front | null> 
   return findFront(type, dirs, io).catch(() => null)
 }
 
-// Appends one line to the session log, from named fields only (see the constructors in sessionlog.ts), and rewrites the file
-async function emit($: EngineInterface, line: Line): Promise<void> {
-  if (!logPath) return
-  logLines.push(line)
-  await $.fs.write(logPath.jsonl, toJsonl(logLines)).catch(() => undefined)
+// The project's log is shared by every session in it: a row is appended to the file as it is now (read, add, write), never
+// written from this session's memory alone, so a session running at the same time keeps its own rows. Writes of one session
+// are chained so they cannot overtake each other. False when the file could not be written (or could not be read whole).
+let writeChain: Promise<unknown> = Promise.resolve()
+async function appendRows($: EngineInterface, jsonl: string, rows: readonly Line[]): Promise<boolean> {
+  const run = async (): Promise<boolean> => {
+    let text = await $.fs.read(jsonl).then(t => (typeof t === 'string' ? t : null), () => null)
+    // A file that exists but cannot be read is left alone: writing over it would lose every other session's rows
+    if (text === null && (await $.fs.exists(jsonl).catch(() => false))) return false
+    text ??= ''
+    if (text !== '' && !text.endsWith('\n')) text += '\n'
+    return $.fs.write(jsonl, text + toJsonl(rows)).then(() => true, () => false)
+  }
+  const next = writeChain.then(run, run)
+  writeChain = next.catch(() => undefined)
+  return next
 }
-// The part of a log file's name that identifies its session: the name without its "date-hhmm-" stamp
-const idOf = (f: string) => f.replace(/^\d{4}-\d{2}-\d{2}-\d{4}-/, '')
-// False when $.session.id() failed and the log runs under the placeholder id "session": such a log is never continued
+// Appends one line to the session log, from named fields only (see the constructors in sessionlog.ts), tagged with the session id
+async function emit($: EngineInterface, line: Line): Promise<boolean> {
+  if (!logPath) return false
+  const row = { ...line, sid: clip(logSid, 60) }
+  logLines.push(row)
+  return appendRows($, logPath.jsonl, [row])
+}
+// The part of a legacy log file's name that identifies its session: the name without its "date-hhmm-" stamp
+const idOf = (f: string) => f.replace(/^\d{4}-\d{2}-\d{2}-\d{4}-/, '').replace(/\.jsonl$/, '')
+// Every row of the project's log, oldest first; when it has none, the per-session files of earlier versions in the home
+// fallback folder (their rows get the session id from the file name)
+async function allRows($: EngineInterface): Promise<{ rows: Line[]; files: string[] }> {
+  if (!logPath) return { rows: [], files: [] }
+  const text = await $.fs.read(logPath.jsonl).then(t => (typeof t === 'string' ? t : ''), () => '')
+  const rows = fromJsonl(text)
+  // This session's own rows do not count: the log has "no rows" while no other session has written to it
+  if (rows.some(r => r.sid !== logSid) || !home) return { rows, files: [logPath.jsonl] }
+  const dir = legacyDir(home, sessionCwd)
+  const files = (await sessionFiles($, dir)).filter(f => f !== 'cr-log.jsonl')
+  const out: Line[] = []
+  for (const f of files) {
+    const body = await $.fs.read(`${dir}/${f}`).then(t => (typeof t === 'string' ? t : ''), () => '')
+    out.push(...fromJsonl(body).map(r => ({ ...r, sid: idOf(f) })))
+  }
+  if (out.length === 0) return { rows, files: [logPath.jsonl] }
+  return { rows: [...out, ...rows], files: files.map(f => `${dir}/${f}`) }
+}
+// The readable view, rebuilt from the whole shared log (this session's rows when it cannot be read)
+async function writeMd($: EngineInterface, at: number): Promise<void> {
+  if (!logPath) return
+  const text = await $.fs.read(logPath.jsonl).then(t => (typeof t === 'string' ? t : ''), () => '')
+  const rows = fromJsonl(text)
+  await $.fs.write(logPath.md, mdAll(rows.length > 0 ? rows : logLines, at)).catch(() => undefined)
+}
+// False when $.session.id() failed and the session runs under a made-up id: such a log is never continued
 let sessionKnown = true
 
-// A session that started in a temp folder is logged under "spare-XXXX". When a later turn reports a real project folder,
-// the log moves under that project's name. It never overwrites a file: where the project already has a log of this
-// session (or a file of the same name), the lines are appended to that file, their task numbers continuing its own, and
-// the spare file is emptied (the mod has no way to delete a file) only after the write went through. Where the
-// existing file cannot be read back whole, or the write fails, both files stay as they are and the log stays in the spare folder.
+// <cwd>/.claude/.gitignore: ignores the log files unless something already does. The project's own .gitignore is only read.
+async function ignoreLog($: EngineInterface, cwd: string): Promise<void> {
+  const root = cwd.replace(/\\/g, '/').replace(/\/+$/, '')
+  const read = (path: string) => $.fs.read(path).then(t => (typeof t === 'string' ? t : null), () => null)
+  const all = String.raw`\*|\.claude\/?|\.claude\/\*`
+  const has = (text: string | null, rule: string) => text !== null && new RegExp(`^\\s*\\/?(${rule})\\s*$`, 'm').test(text)
+  // Both log files covered (cr-log.*, or both exact names), checked apart from the reviews folder
+  const logsIn = (text: string | null) => has(text, `${all}|(\\.claude\\/)?cr-log\\.\\*`) || (has(text, '(\\.claude\\/)?cr-log\\.md') && has(text, '(\\.claude\\/)?cr-log\\.jsonl'))
+  const reviewsIn = (text: string | null) => has(text, `${all}|(\\.claude\\/)?cr-reviews\\/?`)
+  const mineAt = `${root}/.claude/.gitignore`
+  const mine = await read(mineAt)
+  // A file that exists but cannot be read is left alone: writing over it would lose its rules
+  if (mine === null && (await $.fs.exists(mineAt).catch(() => false))) return
+  const top = await read(`${root}/.gitignore`)
+  const rules = [...(logsIn(mine) || logsIn(top) ? [] : ['cr-log.*']), ...(reviewsIn(mine) || reviewsIn(top) ? [] : ['cr-reviews/'])]
+  if (rules.length === 0) return
+  await $.fs.write(mineAt, `${mine === null || mine === '' ? '' : mine.replace(/\s*$/, '\n')}${rules.join('\n')}\n`).catch(() => undefined)
+}
+
+// Where a session's log goes: CR_LOG_DIR wins; a temp or spare-* folder (or no folder) uses the home fallback;
+// anything else the project's own .claude folder
+function chooseLog(cwd: string): { paths: LogPaths | null; spare: boolean; project: boolean } {
+  if (logDirEnv) return { paths: envLogPaths(logDirEnv), spare: false, project: false }
+  if (cwd.trim() !== '' && !isTempCwd(cwd)) return { paths: projectLogPaths(cwd), spare: false, project: true }
+  return { paths: home ? legacyLogPaths(home, cwd) : null, spare: true, project: false }
+}
+
+// A session that started in a temp folder is logged in the home fallback under "spare-XXXX". When a later turn reports a
+// real project folder, its rows are appended to that project's log (never overwriting it), and are then taken out of the
+// spare file (the mod has no way to delete a file). Where the append fails, the log stays in the spare folder.
 async function renameSpare($: EngineInterface, cwd: unknown): Promise<void> {
-  if (!logPath || typeof cwd !== 'string' || cwd.trim() === '') return
-  const current = logPath.dir.split('/').pop() ?? ''
-  const real = projectName(cwd)
-  if (!/^spare-/i.test(current) || /^spare-/i.test(real) || real === current) return
+  if (!logPath || !logSpare || typeof cwd !== 'string' || cwd.trim() === '' || isTempCwd(cwd)) return
   const old = logPath
-  const dir = `${old.dir.slice(0, old.dir.lastIndexOf('/'))}/${real}`
-  const name = `${(old.jsonl.split('/').pop() ?? '').replace(/\.jsonl$/, '')}.jsonl`
-  const names = await sessionFiles($, dir)
-  const same = sessionKnown ? (names.find(f => idOf(f) === idOf(name)) ?? null) : null
-  let target = same ?? name
-  for (let i = 2; same === null && names.includes(target); i++) target = name.replace(/\.jsonl$/, `-${i}.jsonl`)
-  let before: Line[] = []
-  if (same !== null) {
-    const text = await $.fs.read(`${dir}/${same}`).then(t => (typeof t === 'string' ? t : null), () => null)
-    if (text === null) return
-    before = fromJsonl(text)
-    // A row that does not parse would be lost by the rewrite: keep both files instead
-    if (before.length !== text.split(/\r?\n/).filter(r => r.trim() !== '').length) return
-  }
-  const offset = before.filter(l => l.t === 'task').length
+  const real = projectName(cwd)
+  const existing = fromJsonl(await $.fs.read(projectLogPaths(cwd).jsonl).then(t => (typeof t === 'string' ? t : ''), () => ''))
+  const offset = sessionKnown ? rowsOf(existing, logSid).filter(l => l.t === 'task').length : 0
   const ours = logLines.map(l => {
     const moved = l.t === 'session' && l.phase === 'start' ? { ...l, project: real } : l
     return offset > 0 && typeof moved.n === 'number' ? { ...moved, n: moved.n + offset } : moved
   })
-  const merged = [...before, ...ours]
-  const file = `${dir}/${target}`
-  const written = await $.fs.write(file, toJsonl(merged)).then(() => true, () => false)
-  if (!written) return
-  logPath = { dir, jsonl: file, md: file.replace(/\.jsonl$/, '.md') }
-  logLines = merged
+  let target = projectLogPaths(cwd)
+  if (await appendRows($, target.jsonl, ours)) await ignoreLog($, cwd)
+  else {
+    // The project folder cannot be written: the home fallback under the real name
+    if (!home) return
+    target = legacyLogPaths(home, cwd)
+    if (target.jsonl === old.jsonl || !(await appendRows($, target.jsonl, ours))) return
+  }
+  logPath = target
+  logLines = ours
+  logSpare = false
+  logProject = real
   taskNo += offset
   for (const meta of agentMeta.values()) meta.n += offset
-  await $.fs.write(old.jsonl, '').catch(() => undefined)
+  const rest = fromJsonl(await $.fs.read(old.jsonl).then(t => (typeof t === 'string' ? t : ''), () => '')).filter(l => l.sid !== logSid)
+  await $.fs.write(old.jsonl, toJsonl(rest)).catch(() => undefined)
+  const file = target.jsonl
   await update($, logfile, () => file)
 }
 const GENERAL_WARNING = 'general-purpose launched: use a roster agent'
@@ -325,38 +392,40 @@ export const register: Register = on => {
         else await rulesFailed($, failed)
       }
     }
-    // The session log: a new file, the one a reload was already writing, or the one this session id already has
-    if (home) {
+    // The session log: the project's shared log (see chooseLog), this session's rows continued when a reload or the same session id has some
+    logDirEnv = await $.env.get('CR_LOG_DIR').then(v => (typeof v === 'string' && isAbsoluteDir(v) ? v.trim() : ''), () => '')
+    const chosen = chooseLog(e.cwd)
+    if (chosen.paths) {
       const prior = await read($, logfile)
-      // An id that cannot be read is no id: the log is then a new stamped file, never one an earlier session left
       const gotId = await $.session.id().then(v => (typeof v === 'string' && v.trim() !== '' ? v : null), () => null)
-      const sid = gotId ?? 'session'
       sessionKnown = gotId !== null
+      logProject = projectName(e.cwd)
+      logSpare = chosen.spare
+      const at = await $.clock.now()
       if (prior) {
-        logPath = { jsonl: prior, md: prior.replace(/\.jsonl$/, '.md'), dir: prior.slice(0, prior.lastIndexOf('/')) }
-        logLines = fromJsonl(await $.fs.read(prior).then(t => (typeof t === 'string' ? t : ''), () => ''))
+        const dir = prior.slice(0, prior.lastIndexOf('/'))
+        logPath = pathsIn(dir, dir.endsWith('/.claude') ? `${dir}/cr-reviews` : `${dir}/reviews`)
+        logSpare = /\/cr-logs\/spare-[^/]*$/i.test(dir)
+        const rows = fromJsonl(await $.fs.read(prior).then(t => (typeof t === 'string' ? t : ''), () => ''))
+        // An id that cannot be read is no id: a reload goes on with the last session in the file, a new session gets an id of its own
+        logSid = clip(gotId ?? sessionIds(rows).at(-1) ?? `session-${at}`, 60)
+        logLines = rowsOf(rows, logSid)
         taskNo = logLines.filter(l => l.t === 'task').length
       } else {
-        const at = await $.clock.now()
-        logPath = logPaths(home, e.cwd, at, sid)
-        // One file per session: a log of the same session id in this project's folder is continued, not duplicated
-        const want = idOf(logPath.jsonl.split('/').pop() ?? '')
-        const files = await sessionFiles($, logPath.dir)
-        const same = sessionKnown ? files.find(f => idOf(f) === want) : undefined
-        // No id: a name no file has yet, so a log of the same minute is not overwritten either
-        if (!sessionKnown) {
-          const stem = (logPath.jsonl.split('/').pop() ?? '').replace(/\.jsonl$/, '')
-          let k = 1
-          let free = stem
-          while (files.includes(`${free}.jsonl`)) free = `${stem}-${++k}`
-          logPath = { dir: logPath.dir, jsonl: `${logPath.dir}/${free}.jsonl`, md: `${logPath.dir}/${free}.md` }
-        }
-        if (same) logPath = { dir: logPath.dir, jsonl: `${logPath.dir}/${same}`, md: `${logPath.dir}/${same.replace(/\.jsonl$/, '.md')}` }
-        logLines = same ? fromJsonl(await $.fs.read(logPath.jsonl).then(t => (typeof t === 'string' ? t : ''), () => '')) : []
+        logPath = chosen.paths
+        logSid = clip(gotId ?? `session-${at}`, 60)
+        // One log per project: this session id's rows already in it are continued, not duplicated
+        logLines = sessionKnown ? rowsOf(fromJsonl(await $.fs.read(logPath.jsonl).then(t => (typeof t === 'string' ? t : ''), () => '')), logSid) : []
         taskNo = logLines.filter(l => l.t === 'task').length
+        if (chosen.project) await ignoreLog($, e.cwd)
+        const start = sessionLine(at, 'start', logProject, await mode$($))
+        // The project folder (or the CR_LOG_DIR folder) cannot be written: the home fallback, with the same row
+        if (!(await emit($, start)) && (chosen.project || logDirEnv) && home) {
+          logPath = legacyLogPaths(home, e.cwd)
+          await appendRows($, logPath.jsonl, logLines.slice(-1))
+        }
         const file = logPath.jsonl
         await update($, logfile, () => file)
-        await emit($, sessionLine(at, 'start', projectName(e.cwd), await mode$($)))
       }
     }
     // The agent /cr-review runs: Sonnet at medium, Read and Grep only (the prompt names the files)
@@ -522,11 +591,11 @@ export const register: Register = on => {
     if (!logPath) return { text: 'session log: off (no home folder found)' }
     const now = await $.clock.now()
     if (e.args.trim() !== 'last') return { text: `${mdOf(logLines, now)}\n${logPath.jsonl}` }
-    const files = await sessionFiles($, logPath.dir)
-    const previous = files.filter(f => f !== logPath?.jsonl.split('/').pop()).at(-1)
+    // "last" is the session before this one in the project's log
+    const { rows, files } = await allRows($)
+    const previous = sessionIds(rows).filter(id => id !== logSid).at(-1)
     if (!previous) return { text: 'no earlier session log for this project' }
-    const text = await $.fs.read(`${logPath.dir}/${previous}`).then(t => (typeof t === 'string' ? t : ''), () => '')
-    return { text: `${mdOf(fromJsonl(text))}\n${logPath.dir}/${previous}` }
+    return { text: `${mdOf(rowsOf(rows, previous))}\n${files.length === 1 ? files[0] : (files.find(f => f.includes(previous)) ?? files[0])}` }
   })
 
   // Runs when you type /cr-review [n]: one Sonnet agent at medium effort reads the last n logs of this project and reports.
@@ -535,12 +604,16 @@ export const register: Register = on => {
     if (!logPath) return { text: 'session log: off (no home folder found)' }
     const asked = Number.parseInt(e.args.trim(), 10)
     const count = Number.isFinite(asked) && asked > 0 ? Math.min(asked, 50) : 10
-    const files = (await sessionFiles($, logPath.dir)).slice(-count).map(f => `${logPath?.dir}/${f}`)
-    if (files.length === 0) return { text: 'no session logs for this project yet' }
+    // The shared log holds every session: the agent is told which last n session ids to read. Earlier versions' per-session files are read only when it has no rows.
+    const { rows, files: all } = await allRows($)
+    const ids = sessionIds(rows).slice(-count)
+    if (ids.length === 0) return { text: 'no session logs for this project yet' }
+    const legacy = all.length !== 1 || all[0] !== logPath.jsonl
+    const files = legacy ? all.filter(f => ids.some(id => f.includes(id))) : all
     const at = await $.clock.now()
-    const taken = await $.fs.exists(`${logPath.dir}/reviews/${dateOf(at)}.md`).catch(() => false)
-    const out = `${logPath.dir}/reviews/${taken ? stamp(at) : dateOf(at)}.md`
-    const started = await $.agent.spawn({ prompt: reviewPrompt(files, logPath.dir.split('/').pop() ?? ''), description: 'Review session logs', subagentType: `${$.plugin.name}:${REVIEW_AGENT}`, model: 'sonnet' })
+    const taken = await $.fs.exists(`${logPath.reviews}/${dateOf(at)}.md`).catch(() => false)
+    const out = `${logPath.reviews}/${taken ? stamp(at) : dateOf(at)}.md`
+    const started = await $.agent.spawn({ prompt: reviewPrompt(files, logProject, legacy ? [] : ids), description: 'Review session logs', subagentType: `${$.plugin.name}:${REVIEW_AGENT}`, model: 'sonnet' })
     if (started.deny || !started.agentId) return { text: `review not started: ${started.deny ?? 'no agent id'}` }
     reviewJobs.set(started.agentId, out)
     return { text: `review started on ${files.length} log${files.length === 1 ? '' : 's'}: sonnet, medium, Read and Grep only. It will be written to ${out}; it changes nothing.` }
@@ -550,8 +623,8 @@ export const register: Register = on => {
   on('session.end', async ($, e, next) => {
     if (logPath) {
       const at = await $.clock.now()
-      await emit($, sessionLine(at, 'end', logPath.dir.split('/').pop() ?? '', await mode$($)))
-      await $.fs.write(logPath.md, mdOf(logLines, at)).catch(() => undefined)
+      await emit($, sessionLine(at, 'end', logProject, await mode$($)))
+      await writeMd($, at)
     }
     return next(e)
   }).catch(($, e, next) => next(e))
@@ -1053,7 +1126,7 @@ export const register: Register = on => {
         const empty = !model && split.tokensIn + split.tokensCached + split.tokensOut + split.tokensWrite === 0
         if (!empty) await emit($, mainLine(at, taskNo, { model: model || '—', effort: (await read($, route))?.effort ?? null, in: split.tokensIn, cached: split.tokensCached, out: split.tokensOut, cost, sec: seconds }))
         // The report is rewritten after each main turn, so a session that never sees session.end (a spare one) still has it
-        if (logPath) await $.fs.write(logPath.md, mdOf(logLines, at)).catch(() => undefined)
+        if (logPath) await writeMd($, at)
       }
     }
 
