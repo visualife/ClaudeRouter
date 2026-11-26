@@ -199,6 +199,8 @@ Set them from the prompt; they persist across reloads.
 | `/cr-review [n]` | One Sonnet agent reads the last n logs (default 10) and proposes at most five edits. |
 | `/cr-status` | Show the current options. |
 
+**Project threads and Remote Control.** Sessions that list only file-based plugin commands get the same commands from `commands/`: type `/cr-<name>` or its namespaced form `/agent-ClaudeRouter:cr-<name>` (for example `/agent-ClaudeRouter:cr-orchestrator off`). The stub runs the same handler as the runtime command and Claude prints its reply. `/cr` has no pane there and shows `/cr-status` instead.
+
 **Ultracode.** Only the person can turn it on: type the `ultracode` keyword in a prompt, or `/effort ultracode`. The mod never turns it on and never approves a Workflow call. Recommended: `/config workflowSizeGuideline=small`. With `/cr-ultracode advise` (default) the mod:
 - detects the keyword in a prompt and shows an `ultracode` chip on the route row while that task runs;
 - routes Workflow agents like any other sub-agent (Opus and Fable go down to Sonnet unless the script names a model), including when the engine gives no parent model;

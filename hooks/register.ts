@@ -339,6 +339,149 @@ async function snapshot($: EngineInterface, surface: string, columns: number, ro
   }
 }
 
+// The /cr-* commands as functions of their arguments: the runtime commands (command.run) and the file-based stubs in
+// commands/ (expanded through skill.prompt, see runMarker) both call these, so both run the same code.
+type Reply = { text?: string }
+
+// /cr-<option>: /cr-warm 2h is the option 'warm' with the argument '2h'
+async function runOption($: EngineInterface, sub: string, args: string): Promise<Reply> {
+  const now = await $.clock.now()
+  const current = normalize(await read($, options))
+  const { next, text } = applyArgs(`${sub} ${args}`, current, now)
+  // Turning the orchestrator on needs its rules: a missing file is said, not confirmed
+  if (sub === 'orchestrator' && next && next.orchestrator !== 'off') {
+    const rules = await loadRules($)
+    if (rules === null) return { text: `orchestrator not turned on: the rules file is missing or empty: ${rulesPath()}. Create it, then run the command again.` }
+    const size = byteLength(rules)
+    // Already loaded in this conversation (on to hands on, or the reverse): do not load them twice
+    const failed = current.orchestrator !== 'off' && current.rules !== null ? null : await injectRules($, rules)
+    if (failed !== null) {
+      await rulesFailed($, failed)
+      return { text: `orchestrator: off · rules NOT loaded (${failed})` }
+    }
+    await update($, options, () => ({ ...next, rules: size }))
+    return { text: next.orchestrator === 'on' ? `orchestrator: on · manager only · rules loaded (${sizeText(size)})` : `orchestrator: hands on · guard off · rules loaded (${sizeText(size)})` }
+  }
+  if (next) await update($, options, () => next)
+  // Keep-warm window armed, re-armed or closed by hand: one event line
+  if (sub === 'warm' && next) {
+    // A command takes the window over from auto-arm; "off" also ends auto-arm for the rest of the session
+    autoUntil = 0
+    if (args.trim().toLowerCase() === 'off') autoOff = true
+    if (next.warmUntil > now) {
+      lastHeartbeatAt = now
+      await emit($, warmEvent(now, taskNo, 'armed', { via: 'command', until: next.warmUntil, minutes: Math.round((next.warmUntil - now) / 60_000) }))
+    } else if (current.warmUntil > now) {
+      lastHeartbeatAt = null
+      await emit($, warmEvent(now, taskNo, 'closed', { reason: 'off', until: current.warmUntil }))
+    }
+  }
+  // /cr-fable reset and /cr-fable off: the fallback ends now
+  if (sub === 'fable' && ['reset', 'off'].includes(args.trim().toLowerCase())) {
+    fableOut = null
+    lastFableLimitAt = null
+    await update($, warnings, list => list.filter(w => !w.startsWith(FABLE_OUT_WARNING)))
+  }
+  return { text }
+}
+
+// /cr-deck: the same deck the pane draws, as text with exact figures
+async function runDeck($: EngineInterface, args: string): Promise<Reply> {
+  await loadPrices($)
+  const list = await read($, tasks)
+  return { text: deckText(args.trim() === 'last' ? list.slice(-1) : list, await read($, prices)) }
+}
+
+// /cr-log: the session log as a table. "last" reads the previous session's file instead.
+async function runLog($: EngineInterface, args: string): Promise<Reply> {
+  if (!logPath) return { text: 'session log: off (no home folder found)' }
+  const now = await $.clock.now()
+  if (args.trim() !== 'last') return { text: `${mdOf(logLines, now)}\n${logPath.jsonl}` }
+  // "last" is the session before this one in the project's log
+  const { rows, files } = await allRows($)
+  const previous = sessionIds(rows).filter(id => id !== logSid).at(-1)
+  if (!previous) return { text: 'no earlier session log for this project' }
+  return { text: `${mdOf(rowsOf(rows, previous))}\n${files.length === 1 ? files[0] : (files.find(f => f.includes(previous)) ?? files[0])}` }
+}
+
+// /cr-review [n]: one Sonnet agent at medium effort reads the last n logs of this project and reports.
+// The hook writes its answer to reviews/<date>.md; nothing is edited.
+async function runReview($: EngineInterface, args: string): Promise<Reply> {
+  if (!logPath) return { text: 'session log: off (no home folder found)' }
+  const asked = Number.parseInt(args.trim(), 10)
+  const count = Number.isFinite(asked) && asked > 0 ? Math.min(asked, 50) : 10
+  // The shared log holds every session: the agent is told which last n session ids to read. Earlier versions' per-session files are read only when it has no rows.
+  const { rows, files: all } = await allRows($)
+  const ids = sessionIds(rows).slice(-count)
+  if (ids.length === 0) return { text: 'no session logs for this project yet' }
+  const legacy = all.length !== 1 || all[0] !== logPath.jsonl
+  const files = legacy ? all.filter(f => ids.some(id => f.includes(id))) : all
+  const at = await $.clock.now()
+  const taken = await $.fs.exists(`${logPath.reviews}/${dateOf(at)}.md`).catch(() => false)
+  const out = `${logPath.reviews}/${taken ? stamp(at) : dateOf(at)}.md`
+  const started = await $.agent.spawn({ prompt: reviewPrompt(files, logProject, legacy ? [] : ids), description: 'Review session logs', subagentType: `${$.plugin.name}:${REVIEW_AGENT}`, model: 'sonnet' })
+  if (started.deny || !started.agentId) return { text: `review not started: ${started.deny ?? 'no agent id'}` }
+  reviewJobs.set(started.agentId, out)
+  return { text: `review started on ${files.length} log${files.length === 1 ? '' : 's'}: sonnet, medium, Read and Grep only. It will be written to ${out}; it changes nothing.` }
+}
+
+// /cr-prices: reloads the table and says what is filled in
+async function runPrices($: EngineInterface): Promise<Reply> {
+  await loadPrices($)
+  const table = await read($, prices)
+  if (pricesEmpty(table)) return { text: 'prices missing: fill in prices.json in the plugin folder, or ~/.claude/clauderouter-prices.json (USD per million tokens), then /cr-prices' }
+  return { text: Object.entries(table).map(([m, p]) => `${m}: input ${p?.input ?? '—'} · output ${p?.output ?? '—'} · cache write ${p?.cacheWrite ?? '—'} · cache read ${p?.cacheRead ?? '—'}`).join('\n') }
+}
+
+// /cr: opens the pane. Opening it draws nothing by itself; ui.render fills it.
+async function runPane($: EngineInterface): Promise<Reply> {
+  // A bare /cr also brings back a band that was closed with the ✕, so it can never be lost
+  const o = normalize(await read($, options))
+  const restored = o.band === 'off'
+  if (restored) await update($, options, () => ({ ...o, band: 'full' as const }))
+  await $.ui.open({ id: PANE, title: 'ClaudeRouter', rows: 24, closeOnEscape: true })
+  return restored ? { text: 'ClaudeRouter band restored: /cr-band off closes it' } : {}
+}
+
+// File-based stubs: commands/cr-<name>.md expands to the line "[cr-cmd] cr-<name> <arguments>" for sessions that list only
+// file commands (claude.ai project threads, Remote Control). skill.prompt sees the expanded text; runMarker runs the same
+// function as the runtime command and the text the model gets is replaced by the reply, to be printed verbatim.
+// /cr (the pane) has no text form: its stub runs cr-status.
+const MARKER = /^\[cr-cmd\][ \t]+(cr(?:-[a-z]+)?)[ \t]*(.*)$/m
+export function markerOf(text: string): { command: string; args: string } | null {
+  const m = MARKER.exec(text)
+  if (!m) return null
+  // An engine that did not substitute $ARGUMENTS leaves it literal: that is no argument
+  const args = (m[2] ?? '').replace(/\$ARGUMENTS/g, '').trim()
+  return { command: m[1] === 'cr' ? 'cr-status' : m[1], args }
+}
+
+async function runCommand($: EngineInterface, command: string, args: string): Promise<Reply | null> {
+  const option = COMMANDS.find(([name]) => `cr-${name}` === command)
+  if (option) return runOption($, option[1], args)
+  if (command === 'cr-deck') return runDeck($, args)
+  if (command === 'cr-log') return runLog($, args)
+  if (command === 'cr-review') return runReview($, args)
+  if (command === 'cr-prices') return runPrices($)
+  return null
+}
+
+const replyPrompt = (command: string, args: string, reply: string) =>
+  `ClaudeRouter ran /${command}${args ? ` ${args}` : ''} itself; nothing else is needed. Print the reply below to the user verbatim, inside one code block, and add nothing else: no tool call, no comment.\n\n<cr-reply command="${command}">\n${reply}\n</cr-reply>`
+
+async function runMarker($: EngineInterface, text: string): Promise<string | null> {
+  const marker = markerOf(text)
+  if (!marker) return null
+  let reply: Reply | null
+  try {
+    reply = await runCommand($, marker.command, marker.args)
+  } catch (error) {
+    reply = { text: `/${marker.command} failed: ${error instanceof Error ? error.message : String(error)}` }
+  }
+  if (reply === null) return replyPrompt(marker.command, marker.args, `unknown ClaudeRouter command: /${marker.command}`)
+  return replyPrompt(marker.command, marker.args, reply.text?.trim() ? reply.text : '(done, no output)')
+}
+
 export const register: Register = on => {
   // Runs before your first prompt, and again after a reload
   on('session.start', async ($, e, next) => {
@@ -537,87 +680,13 @@ export const register: Register = on => {
 
   // Runs when you type /cr-<option>: /cr-warm 2h is the option 'warm' with the argument '2h'
   for (const [name, sub] of COMMANDS) {
-    on('command.run', { command: `cr-${name}` }, async ($, e) => {
-      const now = await $.clock.now()
-      const current = normalize(await read($, options))
-      const { next, text } = applyArgs(`${sub} ${e.args}`, current, now)
-      // Turning the orchestrator on needs its rules: a missing file is said, not confirmed
-      if (sub === 'orchestrator' && next && next.orchestrator !== 'off') {
-        const rules = await loadRules($)
-        if (rules === null) return { text: `orchestrator not turned on: the rules file is missing or empty: ${rulesPath()}. Create it, then run the command again.` }
-        const size = byteLength(rules)
-        // Already loaded in this conversation (on to hands on, or the reverse): do not load them twice
-        const failed = current.orchestrator !== 'off' && current.rules !== null ? null : await injectRules($, rules)
-        if (failed !== null) {
-          await rulesFailed($, failed)
-          return { text: `orchestrator: off · rules NOT loaded (${failed})` }
-        }
-        await update($, options, () => ({ ...next, rules: size }))
-        return { text: next.orchestrator === 'on' ? `orchestrator: on · manager only · rules loaded (${sizeText(size)})` : `orchestrator: hands on · guard off · rules loaded (${sizeText(size)})` }
-      }
-      if (next) await update($, options, () => next)
-      // Keep-warm window armed, re-armed or closed by hand: one event line
-      if (sub === 'warm' && next) {
-        // A command takes the window over from auto-arm; "off" also ends auto-arm for the rest of the session
-        autoUntil = 0
-        if (e.args.trim().toLowerCase() === 'off') autoOff = true
-        if (next.warmUntil > now) {
-          lastHeartbeatAt = now
-          await emit($, warmEvent(now, taskNo, 'armed', { via: 'command', until: next.warmUntil, minutes: Math.round((next.warmUntil - now) / 60_000) }))
-        } else if (current.warmUntil > now) {
-          lastHeartbeatAt = null
-          await emit($, warmEvent(now, taskNo, 'closed', { reason: 'off', until: current.warmUntil }))
-        }
-      }
-      // /cr-fable reset and /cr-fable off: the fallback ends now
-      if (sub === 'fable' && ['reset', 'off'].includes(e.args.trim().toLowerCase())) {
-        fableOut = null
-        lastFableLimitAt = null
-        await update($, warnings, list => list.filter(w => !w.startsWith(FABLE_OUT_WARNING)))
-      }
-      return { text }
-    }).catch(($, e, next) => next(e))
+    on('command.run', { command: `cr-${name}` }, async ($, e) => runOption($, sub, e.args)).catch(($, e, next) => next(e))
   }
 
-  // Runs when you type /cr-deck: the same deck the pane draws, as text with exact figures
-  on('command.run', { command: 'cr-deck' }, async ($, e) => {
-    await loadPrices($)
-    const list = await read($, tasks)
-    return { text: deckText(e.args.trim() === 'last' ? list.slice(-1) : list, await read($, prices)) }
-  })
-
-  // Runs when you type /cr-log: the session log as a table. "last" reads the previous session's file instead.
-  on('command.run', { command: 'cr-log' }, async ($, e) => {
-    if (!logPath) return { text: 'session log: off (no home folder found)' }
-    const now = await $.clock.now()
-    if (e.args.trim() !== 'last') return { text: `${mdOf(logLines, now)}\n${logPath.jsonl}` }
-    // "last" is the session before this one in the project's log
-    const { rows, files } = await allRows($)
-    const previous = sessionIds(rows).filter(id => id !== logSid).at(-1)
-    if (!previous) return { text: 'no earlier session log for this project' }
-    return { text: `${mdOf(rowsOf(rows, previous))}\n${files.length === 1 ? files[0] : (files.find(f => f.includes(previous)) ?? files[0])}` }
-  })
-
-  // Runs when you type /cr-review [n]: one Sonnet agent at medium effort reads the last n logs of this project and reports.
-  // The hook writes its answer to reviews/<date>.md; nothing is edited.
-  on('command.run', { command: 'cr-review' }, async ($, e) => {
-    if (!logPath) return { text: 'session log: off (no home folder found)' }
-    const asked = Number.parseInt(e.args.trim(), 10)
-    const count = Number.isFinite(asked) && asked > 0 ? Math.min(asked, 50) : 10
-    // The shared log holds every session: the agent is told which last n session ids to read. Earlier versions' per-session files are read only when it has no rows.
-    const { rows, files: all } = await allRows($)
-    const ids = sessionIds(rows).slice(-count)
-    if (ids.length === 0) return { text: 'no session logs for this project yet' }
-    const legacy = all.length !== 1 || all[0] !== logPath.jsonl
-    const files = legacy ? all.filter(f => ids.some(id => f.includes(id))) : all
-    const at = await $.clock.now()
-    const taken = await $.fs.exists(`${logPath.reviews}/${dateOf(at)}.md`).catch(() => false)
-    const out = `${logPath.reviews}/${taken ? stamp(at) : dateOf(at)}.md`
-    const started = await $.agent.spawn({ prompt: reviewPrompt(files, logProject, legacy ? [] : ids), description: 'Review session logs', subagentType: `${$.plugin.name}:${REVIEW_AGENT}`, model: 'sonnet' })
-    if (started.deny || !started.agentId) return { text: `review not started: ${started.deny ?? 'no agent id'}` }
-    reviewJobs.set(started.agentId, out)
-    return { text: `review started on ${files.length} log${files.length === 1 ? '' : 's'}: sonnet, medium, Read and Grep only. It will be written to ${out}; it changes nothing.` }
-  })
+  // Runs when you type /cr-deck, /cr-log, /cr-review [n]
+  on('command.run', { command: 'cr-deck' }, async ($, e) => runDeck($, e.args))
+  on('command.run', { command: 'cr-log' }, async ($, e) => runLog($, e.args))
+  on('command.run', { command: 'cr-review' }, async ($, e) => runReview($, e.args))
 
   // Runs when the session ends: the closing line, and the readable summary next to the log
   on('session.end', async ($, e, next) => {
@@ -629,23 +698,9 @@ export const register: Register = on => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
-  // Runs when you type /cr-prices: reloads the table and says what is filled in
-  on('command.run', { command: 'cr-prices' }, async ($) => {
-    await loadPrices($)
-    const table = await read($, prices)
-    if (pricesEmpty(table)) return { text: 'prices missing: fill in prices.json in the plugin folder, or ~/.claude/clauderouter-prices.json (USD per million tokens), then /cr-prices' }
-    return { text: Object.entries(table).map(([m, p]) => `${m}: input ${p?.input ?? '—'} · output ${p?.output ?? '—'} · cache write ${p?.cacheWrite ?? '—'} · cache read ${p?.cacheRead ?? '—'}`).join('\n') }
-  })
-
-  // Runs when you type /cr. Opening the pane draws nothing by itself; ui.render fills it.
-  on('command.run', { command: 'cr' }, async ($, e) => {
-    // A bare /cr also brings back a band that was closed with the ✕, so it can never be lost
-    const o = normalize(await read($, options))
-    const restored = o.band === 'off'
-    if (restored) await update($, options, () => ({ ...o, band: 'full' as const }))
-    await $.ui.open({ id: PANE, title: 'ClaudeRouter', rows: 24, closeOnEscape: true })
-    return restored ? { text: 'ClaudeRouter band restored: /cr-band off closes it' } : {}
-  })
+  // Runs when you type /cr-prices, and /cr
+  on('command.run', { command: 'cr-prices' }, async ($) => runPrices($))
+  on('command.run', { command: 'cr' }, async ($) => runPane($))
 
   // Runs when a turn begins: a new task row, named by the prompt
   on('turn.start', async ($, e, next) => {
@@ -988,9 +1043,13 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   // Runs when a skill's text is expanded for Claude: it has loaded and is in use
+  // A ClaudeRouter command stub (commands/cr-*.md) is not a skill in use: it runs its command and the model gets the reply
   on('skill.prompt', async ($, e, next) => {
+    const done = await next(e)
+    const replaced = typeof done.text === 'string' ? await runMarker($, done.text) : null
+    if (replaced !== null) return { ...done, text: replaced }
     await update($, skills, list => bumpSkill(list, e.skill))
-    return next(e)
+    return done
   })
 
   // Runs as each hooks module loads: the plugin names ClaudeRouter can see
