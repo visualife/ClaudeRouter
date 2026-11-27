@@ -24,6 +24,11 @@ export type Snapshot = {
   warnings: string[]
   prices: Prices
   orchestrator: 'on' | 'hands' | 'off'
+  // 'claude': routing is off, the route text says "claude code"
+  mode?: 'router' | 'claude'
+  // Ultracode advice: 'advise' shows the chip and the too-many-workflow-agents warning; absent or 'off' shows neither
+  ultracode?: 'off' | 'advise'
+  ultraMax?: number
   now: number
   // Keep-warm window: when it ends and when the next ping is due (null until the first request); null while off
   warm: { until: number; pingAt: number | null } | null
@@ -140,10 +145,26 @@ function header(els: Els, t: Snapshot): RenderElement[] {
 
 // One line per environment override: they beat every choice the deck shows, so they are said where the deck is
 export function warnRows(els: Els, t: Snapshot): RenderElement[] {
-  return t.warnings.map(w => els.Text({ children: [`⚠ ${fmtFit(w, Math.max(40, t.columns - 4))}`], color: 'warning' }))
+  const all = [...t.warnings, ...(ultraWarning(t) ? [ultraWarning(t) as string] : [])]
+  return all.map(w => els.Text({ children: [`⚠ ${fmtFit(w, Math.max(40, t.columns - 4))}`], color: 'warning' }))
 }
 
-function routeRows(els: Els, r: Route): RenderElement[] {
+// The task being worked on: the running one, else the last
+const currentTask = (t: Snapshot): Task | undefined => t.tasks.filter(task => task.status === 'running').at(-1) ?? t.tasks.at(-1)
+// In advise mode, while the current task's prompt names ultracode
+export const ultraChip = (t: Snapshot): boolean => t.ultracode === 'advise' && currentTask(t)?.ultra === true
+// In advise mode, one task that launched more Workflow agents than ultraMax
+export function ultraWarning(t: Snapshot): string | null {
+  if (t.ultracode !== 'advise') return null
+  const max = t.ultraMax ?? 5
+  const n = currentTask(t)?.workflowAgents ?? 0
+  return n > max ? `ultracode: ${n} workflow agents in one task (more than ${max}); /config workflowSizeGuideline=small keeps them fewer` : null
+}
+
+function routeRows(els: Els, r: Route | null, mode?: 'router' | 'claude', ultra = false): RenderElement[] {
+  const chip = ultra ? [els.Text({ children: [' ultracode '], color: 'claude', inverse: true })] : []
+  if (mode === 'claude') return [row(els, [label(els, '⇄', 'Model route'), els.Text({ children: ['route: claude code'], color: 'subtle' }), ...chip])]
+  if (!r) return []
   const why = r.why
   const { Box, Text } = els
   const level = EFFORT_LEVEL[r.effort]
@@ -168,6 +189,7 @@ function routeRows(els: Els, r: Route): RenderElement[] {
       Box({ flexDirection: 'row', columnGap: 1, children: [Box({ flexDirection: 'row', children: signal }), Text({ children: [r.effort] })] }),
       Text({ children: [`conf ${confBar} ${r.conf.toFixed(2)}`] }),
       Text({ children: [r.kept ? '= kept' : '→ switched'], color: r.kept ? 'subtle' : 'claude' }),
+      ...chip,
     ]),
     ...(why ? [row(els, [Box({ width: LABEL }), Text({ children: [why], color: 'subtle', dimColor: true })])] : []),
   ]
@@ -350,7 +372,8 @@ export function drawStrip(els: Els, t: Snapshot): RenderElement {
     flexDirection: 'column',
     children: [
       ...taskBar(els, t),
-      ...(t.route ? routeRows(els, t.route) : [row(els, [label(els, '⇄', 'Model route'), Text({ children: ['waiting for the first request'], color: 'subtle' })])]),
+      ...(t.route || t.mode === 'claude' ? routeRows(els, t.route, t.mode, ultraChip(t)) : [row(els, [label(els, '⇄', 'Model route'), Text({ children: ['waiting for the first request'], color: 'subtle' })])]),
+      ...warnRows(els, t),
       row(els, [Text({ children: ['ClaudeRouter pane: /cr'], color: 'subtle', dimColor: true })]),
     ],
   })
@@ -365,7 +388,7 @@ export function drawBand(els: Els, t: Snapshot): RenderElement {
     flexDirection: 'column',
     children: [
       ...header(els, t),
-      ...(t.route ? routeRows(els, t.route) : [row(els, [label(els, '⇄', 'Model route'), Text({ children: ['waiting for the first request'], color: 'subtle' })])]),
+      ...(t.route || t.mode === 'claude' ? routeRows(els, t.route, t.mode, ultraChip(t)) : [row(els, [label(els, '⇄', 'Model route'), Text({ children: ['waiting for the first request'], color: 'subtle' })])]),
       ...shown.flatMap(task => taskRows(els, t, task)),
       ...factRows(els, t),
     ],

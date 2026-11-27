@@ -16,12 +16,19 @@ export type Tokens = { tokensIn?: number; tokensWrite?: number; tokensCached?: n
 
 export const sessionLine = (at: number, phase: 'start' | 'end', project: string, mode: string): Line => ({ t: 'session', at, phase, project: clip(project, 60), mode })
 
-export const taskLine = (at: number, n: number, text: string, mode: string): Line => ({ t: 'task', at, n, text: clip(text, 120), mode })
+export const taskLine = (at: number, n: number, text: string, mode: string, ultra = false): Line => ({ t: 'task', at, n, text: clip(text, 120), mode, ...(ultra ? { ultra: true } : {}) })
 
-export const launchLine = (at: number, n: number, a: { id: string; type: string; model: string; effort: string | null; by: Who; brief: string; skills: string[] }): Line => ({
+// Two booleans read from the brief and nothing else of it is kept past the first line: does it carry the verifier's
+// verdict rule, and does it have a "Skills:" line at all
+export const launchLine = (at: number, n: number, a: { id: string; type: string; model: string; effort: string | null; by: Who; brief: string; skills: string[]; wf?: string | null }): Line => ({
   t: 'agent', at, n, id: clip(a.id, 60), agent: clip(a.type, 60), model: clip(a.model, 60), effort: a.effort, by: { model: a.by.model, effort: a.by.effort },
   brief: clip(a.brief.split(/\r?\n/).find(l => l.trim() !== '') ?? '', 120), skills: a.skills.slice(0, 10).map(s => clip(s, 60)),
+  verdictRule: a.brief.includes('PASS, FAIL or NOT CHECKED'), skillsLine: /^skills?:/im.test(a.brief),
+  ...(a.wf ? { wf: clip(a.wf, 60) } : {}),
 })
+
+// A Workflow tool call: its meta name when the input carries one (never the script or its arguments)
+export const workflowLine = (at: number, n: number, name: string | null): Line => ({ t: 'workflow', at, n, name: clip(name ?? '', 60) })
 
 export const skillLine = (at: number, n: number, s: { agent: string; id: string; skill: string; named: boolean }): Line => ({ t: 'skill', at, n, agent: clip(s.agent, 60), id: clip(s.id, 60), skill: clip(s.skill, 80), named: s.named })
 
@@ -36,11 +43,118 @@ export const mainLine = (at: number, n: number, m: { model: string; effort: stri
   t: 'main', at, n, model: clip(m.model, 60), effort: m.effort, in: num(m.in), cached: num(m.cached), out: num(m.out), cost: m.cost, sec: Math.round(num(m.sec)),
 })
 
-export const blockLine = (at: number, n: number, b: { tool: string; target: string; agent: string }): Line => ({ t: 'block', at, n, tool: clip(b.tool, 40), target: clip(b.target, 200), agent: clip(b.agent, 40) })
+// Programs whose second word, when it is a plain lowercase word, is a subcommand ("git push", "gh auth", "npm run").
+// For any other program the word after the name may be data (echo pw, mysql db), so only the name is kept.
+// Only a real subcommand from the program's own list is kept; any other second word is dropped.
+const setOf = (s: string) => new Set(s.split(' ').filter(Boolean))
+const NODE_PM = 'run install i ci test exec add remove rm update up init start build publish link audit outdated dlx create x dev lint'
+const PIP = 'install uninstall list show freeze download check config'
+const SUBCOMMANDS: Record<string, Set<string>> = {
+  git: setOf('status log diff add commit push pull fetch checkout switch branch merge rebase clone stash tag reset restore show remote init rm mv blame cherry-pick revert worktree'),
+  gh: setOf('auth pr issue repo run api release workflow gist codespace label search browse status'),
+  glab: setOf('auth mr issue repo ci api release'),
+  npm: setOf('run install ci test exec i start build publish update uninstall ls outdated audit init pack version'),
+  npx: setOf(''),
+  pnpm: setOf(NODE_PM),
+  yarn: setOf(NODE_PM),
+  bun: setOf(NODE_PM),
+  deno: setOf('run test task fmt lint check compile install add init eval'),
+  node: setOf(''),
+  docker: setOf('build run ps images pull push compose exec logs stop start rm rmi network volume system login'),
+  podman: setOf('build run ps images pull push compose exec logs stop start rm rmi network volume system login'),
+  kubectl: setOf('get apply describe logs exec delete rollout config port-forward create scale top'),
+  helm: setOf('install upgrade uninstall list repo template lint status rollback'),
+  terraform: setOf('init plan apply destroy validate fmt output state workspace import'),
+  cargo: setOf('build run test check fmt clippy add install publish update clean doc bench'),
+  rustup: setOf('update install default toolchain target component show'),
+  go: setOf('build run test mod get install fmt vet generate work clean'),
+  pip: setOf(PIP),
+  pip3: setOf(PIP),
+  uv: setOf('pip run sync add remove lock venv init tool python'),
+  poetry: setOf('install add remove update run build publish lock shell init'),
+  composer: setOf('install require update remove dump-autoload run-script init'),
+  dotnet: setOf('build run test publish restore new add clean tool'),
+  brew: setOf('install uninstall update upgrade list info search services tap cleanup'),
+  apt: setOf('install remove update upgrade list search show autoremove'),
+  'apt-get': setOf('install remove update upgrade autoremove clean'),
+  winget: setOf('install uninstall upgrade list search show source'),
+  choco: setOf('install uninstall upgrade list search info'),
+  scoop: setOf('install uninstall update list search info bucket'),
+  systemctl: setOf('start stop restart reload status enable disable is-active daemon-reload'),
+  make: setOf('build test install clean all lint dev'),
+  claude: setOf('plugin mcp config doctor update install auth agents'),
+  vercel: setOf('deploy dev build link pull env logs ls inspect promote rollback'),
+  wrangler: setOf('deploy dev login whoami publish tail kv d1 r2 pages secret types'),
+  cf: setOf('login whoami deploy dns zones workers pages'),
+  shopify: setOf('theme app auth login logout hydrogen version'),
+  supabase: setOf('start stop status db functions link login migration gen init'),
+  aws: setOf('s3 ec2 iam lambda sts configure cloudformation logs ssm'),
+  gcloud: setOf('auth config compute run projects functions app'),
+  az: setOf('login account group vm webapp storage'),
+  fly: setOf('deploy launch status logs apps auth'),
+  flyctl: setOf('deploy launch status logs apps auth'),
+  heroku: setOf('login apps logs run config releases'),
+  netlify: setOf('deploy dev login build link status'),
+  stripe: setOf('login listen trigger logs fixtures'),
+  firebase: setOf('deploy login init emulators use projects functions hosting'),
+}
 
-export const followLine = (at: number, n: number, agent: string): Line => ({ t: 'followup', at, n, agent: clip(agent, 60) })
+// A shell command as the log may keep it: the program's name and, for a known subcommand tool, its plain lowercase
+// subcommand. No other word of the command, ever: no flag, value, URL, credential, path or quoted text. A path to the
+// program is cut to its basename; leading KEY=value words are skipped; a first word that is not a plain name gives ''.
+export function commandWords(command: string): string {
+  const words = command.trim().split(/\s+/)
+  while (words.length > 0 && /^[A-Za-z_][\w.-]*=/.test(words[0] ?? '')) words.shift()
+  // A first word that opens a quote is text, not a name: nothing is kept
+  const word = words[0] ?? ''
+  // A word with separators is a path only when it starts like one (/x, \x, ./x, ~/x, C:\x); "a/b/c" may be a token
+  if (/[\\/]/.test(word) && !/^(?:[A-Za-z]:|[\\/.~])/.test(word)) return ''
+  const program = word.split(/[\\/]/).pop() ?? ''
+  if (!/^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$/.test(program)) return ''
+  // A first word that looks like a token (sk-, ghp_, eyJ, long, or digits mixed with letters past 12 chars) is no name
+  if (/^(?:sk-|ghp_|eyJ)/.test(program) || program.length > 20 || (program.length > 12 && /\d/.test(program) && /[A-Za-z]/.test(program))) return ''
+  const sub = words[1] ?? ''
+  const known = program.toLowerCase()
+  return Object.hasOwn(SUBCOMMANDS, known) && SUBCOMMANDS[known]?.has(sub) ? `${program} ${sub}` : program
+}
 
-export type VerdictWord = 'pass' | 'fail' | 'not checked'
+// Bash has no target path: its program and subcommand stand in
+export const blockLine = (at: number, n: number, b: { tool: string; target: string; agent: string; command?: string }): Line => ({
+  t: 'block', at, n, tool: clip(b.tool, 40), target: b.target === '' && typeof b.command === 'string' && b.command.trim() !== '' ? clip(commandWords(b.command), 80) : clip(b.target, 200), agent: clip(b.agent, 40),
+})
+
+// A keep-warm ping: when, the minutes left in the window, and whether it hit the cache. Never the ping's text.
+// skip: the ping was due and not sent (ok is false). cached/written/in/out/model: what the fork's usage reported
+// (cached = cache-read tokens: a large number proves the main prefix was kept; written = cache-write tokens).
+// usage:'none': the fork result carried no usage.
+export type WarmSkip = 'busy' | 'no-request' | 'window-closed'
+export type WarmFacts = { minutesLeft: number; ok: boolean; skip?: WarmSkip; cached?: number; written?: number; in?: number; out?: number; model?: string; usage?: 'none' }
+export const warmLine = (at: number, n: number, w: WarmFacts): Line => ({
+  t: 'warm', at, n, minutesLeft: Math.max(0, Math.round(num(w.minutesLeft))), ok: w.ok,
+  ...(w.skip ? { skip: w.skip } : {}),
+  ...(w.usage === 'none' ? { usage: 'none' } : {}),
+  ...(w.cached !== undefined ? { cached: Math.round(num(w.cached)) } : {}),
+  ...(w.written !== undefined ? { written: Math.round(num(w.written)) } : {}),
+  ...(w.in !== undefined ? { in: Math.round(num(w.in)) } : {}),
+  ...(w.out !== undefined ? { out: Math.round(num(w.out)) } : {}),
+  ...(w.model ? { model: clip(w.model, 60) } : {}),
+})
+
+// Fable ran out of usage and the main thread went to Opus until `until` (ms). Only a reason code, never the error's text.
+export const fallbackLine = (at: number, f: { from: string; to: string; until: number; reason: string }): Line => ({ t: 'fallback', at, from: clip(f.from, 60), to: clip(f.to, 60), until: Math.round(num(f.until)), reason: clip(f.reason, 30) })
+
+// What a failure or a measure event carries, to confirm the fallback's signal in real sessions: the error code, whether the
+// details exist and how long they are (never their text), which thread, the model family, and the rate-limit windows.
+export type ProbeLimit = { kind: unknown; percentUsed: unknown; resetsAt?: unknown }
+export const probeLine = (at: number, p: { source: 'failure' | 'measure'; code: string | null; detailsLen: number | null; who: 'agent' | 'main' | 'none'; family: string | null; limits: ProbeLimit[] }): Line => ({
+  t: 'probe', at, source: p.source, code: p.code === null ? null : clip(p.code, 40), details: p.detailsLen !== null, detailsLen: p.detailsLen === null ? null : Math.round(num(p.detailsLen)),
+  who: p.who, family: p.family === null ? null : clip(p.family, 20),
+  limits: p.limits.slice(0, 8).map(r => ({ kind: clip(r.kind, 30), percentUsed: num(r.percentUsed), resetsAt: typeof r.resetsAt === 'string' ? clip(r.resetsAt, 40) : null })),
+})
+
+export const followLine =(at: number, n: number, agent: string): Line => ({ t: 'followup', at, n, agent: clip(agent, 60) })
+
+export type VerdictWord = 'pass' | 'fail' | 'not checked' | 'cut'
 export const verdictLine = (at: number, n: number, v: { id: string; verdict: VerdictWord; pass: number; fail: number; unchecked: number }): Line => ({ t: 'verdict', at, n, id: clip(v.id, 60), verdict: v.verdict, pass: v.pass, fail: v.fail, unchecked: v.unchecked })
 
 // ── Reading what the lines need ─────────────────────────────────────────────────────────────────────────────
@@ -51,21 +165,25 @@ export function skillsNamed(brief: string): string[] {
   if (!m) return []
   const line = m[1] ?? ''
   const clean = (s: string) => s.replace(/[`'"*.]/g, '').trim()
-  const isName = (s: string) => /^[a-z0-9][\w:.-]*$/i.test(s) && !/^(none|n\/a)$/i.test(s)
+  // A name is "skill" or "plugin:skill": "skill:" or "flow:" alone is not one
+  const isName = (s: string) => /^[\w-]+(?::[\w-]+)?$/.test(s) && !/^(none|n\/a)$/i.test(s)
+  const isPlugged = (s: string) => /^[\w-]+:[\w-]+$/.test(s)
   // A list ("a, b"): every item is one name. A sentence: only the plugin:skill tokens in it.
   const items = line.split(',').map(clean)
-  const names = items.every(i => isName(i) || i === '') ? items.filter(isName) : line.split(/\s+/).map(clean).filter(t => t.includes(':') && isName(t))
+  const names = items.every(i => isName(i) || i === '') ? items.filter(isName) : line.split(/\s+/).map(clean).filter(isPlugged)
   return names.slice(0, 10)
 }
 
 // A verifier's answer as one verdict and the counts behind it: any FAIL fails; all PASS passes; otherwise not checked.
 // Only the words are counted: nothing of the answer is kept.
-export function verdictOf(answer: string): { verdict: VerdictWord; pass: number; fail: number; unchecked: number } {
+// cut: the agent ended at its turn cap; with no verdict line at all in its report the verdict is 'cut', not 'not checked'
+export function verdictOf(answer: string, cut = false): { verdict: VerdictWord; pass: number; fail: number; unchecked: number } {
   const count = (re: RegExp) => (answer.match(re) ?? []).length
   // A line counts when its first word is the verdict: bullets, bold marks and numbering ("1. FAIL") before it are skipped
   const pass = count(/^[^A-Za-z]*PASS\b/gm)
   const fail = count(/^[^A-Za-z]*FAIL\b/gm)
   const unchecked = count(/^[^A-Za-z]*NOT CHECKED\b/gm)
+  if (cut && pass + fail + unchecked === 0) return { verdict: 'cut', pass, fail, unchecked }
   return { verdict: fail > 0 ? 'fail' : pass > 0 && unchecked === 0 ? 'pass' : 'not checked', pass, fail, unchecked }
 }
 
@@ -80,12 +198,26 @@ export const dateOf = (at: number): string => stamp(at).slice(0, 10)
 
 export const projectName = (cwd: string): string => clip(cwd.split(/[\\/]/).filter(Boolean).pop() ?? 'project', 60).replace(/[^\w.-]+/g, '_') || 'project'
 
-export type LogPaths = { dir: string; jsonl: string; md: string }
-export function logPaths(home: string, cwd: string, at: number, sessionId: string): LogPaths {
-  const dir = `${home.split('\\').join('/').replace(/\/+$/, '')}/.claude/cr-logs/${projectName(cwd)}`
-  const name = `${stamp(at)}-${clip(sessionId, 40).replace(/[^\w-]+/g, '_') || 'session'}`
-  return { dir, jsonl: `${dir}/${name}.jsonl`, md: `${dir}/${name}.md` }
-}
+// One common log per project: every row carries the id of its session ("sid"), so readers filter by session.
+// dir holds cr-log.jsonl and cr-log.md; reviews is where /cr-review writes.
+export type LogPaths = { dir: string; jsonl: string; md: string; reviews: string }
+const slash = (p: string) => p.split('\\').join('/').replace(/\/+$/, '')
+export const pathsIn = (dir: string, reviews: string): LogPaths => ({ dir, jsonl: `${dir}/cr-log.jsonl`, md: `${dir}/cr-log.md`, reviews })
+// The project's own log: <cwd>/.claude/cr-log.jsonl, reviews in <cwd>/.claude/cr-reviews
+export const projectLogPaths = (cwd: string): LogPaths => pathsIn(`${slash(cwd)}/.claude`, `${slash(cwd)}/.claude/cr-reviews`)
+// The old home: ~/.claude/cr-logs/<project>/ (the fallback; its per-session files from earlier versions stay there)
+export const legacyDir = (home: string, cwd: string): string => `${slash(home)}/.claude/cr-logs/${projectName(cwd)}`
+export const legacyLogPaths = (home: string, cwd: string): LogPaths => pathsIn(legacyDir(home, cwd), `${legacyDir(home, cwd)}/reviews`)
+// CR_LOG_DIR (an absolute folder) holds cr-log.jsonl and cr-log.md and wins over everything
+export const envLogPaths = (dir: string): LogPaths => pathsIn(slash(dir), `${slash(dir)}/reviews`)
+export const isAbsoluteDir = (dir: string): boolean => /^([A-Za-z]:)?[\\/]/.test(dir.trim())
+// A temp or spare-* folder is not a project: its log goes to the home fallback until a turn reports the real folder
+export const isTempCwd = (cwd: string): boolean => /^spare-/i.test(slash(cwd).split('/').pop() ?? '') || /(^|\/)(temp|tmp)(\/|$)/i.test(slash(cwd))
+// The session ids of a log's rows, oldest first
+export const sessionIds = (rows: readonly Line[]): string[] => [...new Set(rows.map(r => (typeof r.sid === 'string' ? r.sid : '')).filter(Boolean))]
+export const rowsOf = (rows: readonly Line[], sid: string): Line[] => rows.filter(r => r.sid === sid)
+// The readable view of a whole log: one block per session, newest last
+export const mdAll = (rows: readonly Line[], now?: number): string => sessionIds(rows).map(sid => mdOf(rowsOf(rows, sid), now).replace(/^(# .*)$/m, head => `${head} · ${sid}`)).join('\n---\n\n')
 
 export const toJsonl = (lines: readonly Line[]): string => lines.map(l => JSON.stringify(l)).join('\n') + (lines.length > 0 ? '\n' : '')
 export function fromJsonl(text: string): Line[] {
@@ -198,12 +330,13 @@ export function mdOf(lines: readonly Line[], now?: number): string {
 export const REVIEW_AGENT = 'log-review'
 
 // The brief of the review agent. It names the files it may read; the hook refuses every other path.
-export function reviewPrompt(files: readonly string[], project: string): string {
+export function reviewPrompt(files: readonly string[], project: string, sessions: readonly string[] = []): string {
   return [
     `Review the ClaudeRouter session logs of the project "${project}". Read only these ${files.length} files (JSON lines, one event per line), nothing else:`,
     ...files.map(f => `- ${f}`),
+    ...(sessions.length > 0 ? ['', `The file holds every session of the project. Every line has a sid field: use only lines whose sid is one of these ${sessions.length}: ${sessions.join(', ')}.`] : []),
     '',
-    'Line types (field t): session (phase start|end), task (n, text, mode), agent (n, id, agent, model, effort, by{model,effort}, brief, skills = named in the brief), end (n, id, agent, model, in, cached, out, cost|null, sec, turns, end = ended|maxTurns|failed), main (n, model, in, cached, out, cost|null, sec), skill (agent, id, skill, named = the brief named it), mcp (agent, server, tool), block (tool, target, agent = the agent the guard suggested), followup (n, agent = the agent the orchestrator sent back), verdict (id, verdict pass|fail|not checked).',
+    'Line types (field t): session (phase start|end), task (n, text, mode), agent (n, id, agent, model, effort, by{model,effort}, brief, skills = named in the brief), end (n, id, agent, model, in, cached, out, cost|null, sec, turns, end = ended|maxTurns|failed), main (n, model, in, cached, out, cost|null, sec), skill (agent, id, skill, named = the brief named it), mcp (agent, server, tool), block (tool, target, agent = the agent the guard suggested), followup (n, agent = the agent the orchestrator sent back), verdict (id, verdict pass|fail|not checked|cut), warm (minutesLeft, ok, skip = busy|no-request|window-closed when a due ping was not sent, cached = cache-read tokens and written = cache-write tokens of the ping, in, out, model, usage none when the fork reported no usage).',
     '',
     'Report, in this order, as Markdown:',
     '1. Per agent and model: tasks, average cost and time, follow-up rate (followups / launches), verifier fail rate, maxTurns hits. Cost null means prices were missing: say so, do not guess.',

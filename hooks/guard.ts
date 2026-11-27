@@ -143,38 +143,108 @@ export function directiveOf(text: string): Pin | null {
 
 const BACKSLASH = String.fromCharCode(92)
 const slashes = (p: string) => p.split(BACKSLASH).join('/')
-const norm = (p: string) => slashes(p).toLowerCase()
-const base = (p: string) => norm(p).split('/').pop() ?? ''
-// Files the manager may read anywhere: the project's map, handoff and rules
+// What the manager may touch, as names inside the session's project folder (cwd) and inside ~/.claude.
+// Read: the project's map, handoff and rules files, and plans/. Write: map, handoff and rules, plans/ and old-handoff/.
 const READ_FILES = ['map.md', 'handoff.md', 'claude.md']
-// Files it may write: the same bookkeeping, plus anything under old-handoff/ and plans/
-const WRITE_FILES = ['handoff.md', 'map.md']
-const inDir = (p: string, dir: string) => `/${norm(p)}`.includes(`/${dir}/`)
+const READ_DIRS = ['plans']
+const WRITE_FILES = ['handoff.md', 'map.md', 'claude.md']
+const WRITE_DIRS = ['plans', 'old-handoff']
 
-export type ManagerCtx = { home: string | undefined }
+// The session's folder and the user's home: the project files count only inside the first, ~/.claude only under the second
+export type ManagerCtx = { home: string | undefined; cwd?: string | undefined }
 
-// The user's own folders the manager may read: ~/.claude/orchestrator.md, ~/.claude/routing/, ~/.claude/agents/
-function inClaudeHome(p: string, home: string | undefined): boolean {
-  if (!home) return false
-  const h = `${norm(home).replace(/\/+$/, '')}/.claude`
-  const n = norm(p)
-  return n === `${h}/orchestrator.md` || n.startsWith(`${h}/routing/`) || n.startsWith(`${h}/agents/`) || n === `${h}/routing` || n === `${h}/agents`
+// Segments after a root: a drive ("c:/"), a UNC share ("//") or a POSIX root ("/")
+const ROOT = /^(?:[a-z]:\/|\/\/|\/)/i
+
+// One canonical form for a path, used before EVERY clause: separators unified, "~" expanded to home, a relative path
+// placed under the project folder, "." and ".." segments collapsed (a ".." never climbs above the root), case folded.
+// null when the path cannot be placed (relative with no folder to place it in, drive-relative "c:x", no home for "~").
+function canon(p: string, home?: string, cwd?: string): string | null {
+  let n = slashes(p).trim()
+  if (n === '~' || n.startsWith('~/')) {
+    const h = home ? canon(home) : null
+    if (h === null) return null
+    n = `${h}${n.slice(1)}`
+  } else if (!ROOT.test(n)) {
+    const c = cwd ? canon(cwd) : null
+    if (c === null) return null
+    n = `${c}/${n}`
+  }
+  const m = ROOT.exec(n)
+  if (!m) return null
+  const out: string[] = []
+  for (const part of n.slice(m[0].length).split('/')) {
+    if (part === '..') out.pop()
+    else if (part !== '.' && part !== '') out.push(part)
+  }
+  return m[0].toLowerCase() + out.join('/').toLowerCase()
 }
 
-const mayRead = (p: string, ctx: ManagerCtx) => READ_FILES.includes(base(p)) || inDir(p, 'plans') || norm(p).endsWith('/plans') || inClaudeHome(p, ctx.home)
-const mayWrite = (p: string) => WRITE_FILES.includes(base(p)) || inDir(p, 'old-handoff') || inDir(p, 'plans')
+const under = (n: string, dir: string) => n === dir || n.startsWith(dir.endsWith('/') ? dir : `${dir}/`)
+
+// The user's own folders: ~/.claude/orchestrator.md, ~/.claude/routing/ and ~/.claude/agents/ (read and write).
+// Every other path under ~/.claude (settings.json, plans/, ...) is refused, and the project clauses never apply there.
+// Root cause of the refused Edit on ~/.claude/orchestrator.md: only mayRead consulted this check; mayWrite never did.
+function claudeHome(n: string, home: string | undefined): 'yes' | 'no' | 'outside' {
+  const h = home ? canon(home) : null
+  if (h === null) return 'outside'
+  const claude = `${h.replace(/\/$/, '')}/.claude`
+  if (!under(n, claude)) return 'outside'
+  return n === `${claude}/orchestrator.md` || under(n, `${claude}/routing`) || under(n, `${claude}/agents`) ? 'yes' : 'no'
+}
+
+// The project folder as the guard knows it, or null when none is known (or it is a drive root, which is no project)
+function projectOf(ctx: ManagerCtx): string | null {
+  const c = ctx.cwd ? canon(ctx.cwd) : null
+  return c === null || ROOT.exec(c)?.[0] === c ? null : c
+}
+
+// A project-relative path the project clauses may serve: no ".claude" segment (that folder goes only through claudeHome)
+// and no segment with "~" (an 8.3 short name such as CLAUDE~1 or STUDI~1 can alias a folder the long form would refuse)
+const plainRel = (rel: string) => !rel.split('/').some(s => s === '.claude' || s.includes('~'))
+
+function allowed(p: string, ctx: ManagerCtx, files: readonly string[], dirs: readonly string[], dirItself: boolean): boolean {
+  if (p.trim() === '') return false
+  const n = canon(p, ctx.home, ctx.cwd)
+  if (n === null) return false
+  const home = claudeHome(n, ctx.home)
+  if (home !== 'outside') return home === 'yes'
+  const project = projectOf(ctx)
+  if (project === null || !n.startsWith(`${project}/`)) return false
+  const rel = n.slice(project.length + 1)
+  if (!plainRel(rel)) return false
+  if (files.includes(rel.split('/').pop() ?? '')) return true
+  return dirs.some(d => rel.startsWith(`${d}/`) || (dirItself && rel === d))
+}
+
+const mayRead = (p: string, ctx: ManagerCtx) => allowed(p, ctx, READ_FILES, READ_DIRS, true)
+const mayWrite = (p: string, ctx: ManagerCtx) => allowed(p, ctx, WRITE_FILES, WRITE_DIRS, false)
+
+// A search with no folder of its own runs in the session's folder; with one, it must be inside the project
+function searchesProject(dir: string, ctx: ManagerCtx): boolean {
+  const project = projectOf(ctx)
+  const n = canon(dir === '' ? (ctx.cwd ?? '') : dir, ctx.home, ctx.cwd)
+  return project !== null && n !== null && under(n, project) && claudeHome(n, ctx.home) === 'outside' && plainRel(n.slice(project.length + 1))
+}
+// A glob that stays relative and never climbs: "MAP.md", "**/handoff.md", "plans/**". Anything that could spell a climb
+// or hide one (".." anywhere, braces, character classes, "%" escapes, "~") is refused.
+const relativeGlob = (g: string): boolean => {
+  const s = slashes(g).trim()
+  return s !== '' && !ROOT.test(s) && !/\.\.|[{[%~]/.test(s)
+}
 
 const GUIDE = 'reading → scout, change → coder, design or contract → architect, design and copy → art-copy, tests → test-runner, judging → verifier'
 
 // The text the model reads when a call is refused: what is blocked, the agent to use, and the way out
 export type Verdict = { message: string; tool: string; target: string; agent: string }
 function say(tool: string, target: string, agent: string): Verdict {
-  const message = `Orchestrator mode: the main session manages and does not do the work, so ${tool}${target ? ` on ${target}` : ''} is blocked. Delegate it: use the Agent tool with subagent_type "${agent}" and a self-contained brief (exact files, definition of done, limits, report cap). Which agent for what: ${GUIDE}. If a sub-agent report is unclear, ask the same agent a follow-up with SendMessage; do not open the files yourself. (The person can lift this with /cr-orchestrator off, or /cr-orchestrator hands on for an emergency.)`
+  const message = `Orchestrator mode: the main session manages and does not do the work, so ${tool}${target ? ` on ${target}` : ''} is blocked. Delegate it: use the Agent tool with subagent_type "${agent}" (or, if the person opted into ultracode, a Workflow) and a self-contained brief (exact files, definition of done, limits, report cap). Which agent for what: ${GUIDE}. If a sub-agent report is unclear, ask the same agent a follow-up with SendMessage; do not open the files yourself. (The person can lift this with /cr-orchestrator off, or /cr-orchestrator hands on for an emergency.)`
   return { message, tool, target, agent }
 }
 
 // null = allowed. Everything not named here (Agent, SendMessage, the task tools, web and MCP tools) is allowed:
-// the guard is about files and the shell.
+// the guard is about files and the shell. ctx.cwd is the session's project folder: the project files (MAP.md, HANDOFF.md,
+// CLAUDE.md, plans/, old-handoff/) are allowed only inside it.
 export const managerBlock = (tool: string, input: Record<string, unknown>, ctx: ManagerCtx): string | null => managerVerdict(tool, input, ctx)?.message ?? null
 
 // The same check with what the log needs: the tool, the target path (none for Bash) and the agent the refusal names
@@ -188,17 +258,20 @@ export function managerVerdict(tool: string, input: Record<string, unknown>, ctx
     case 'Glob':
     case 'Grep': {
       const dir = str('path')
-      // A search is allowed inside an allowed folder or file, or when it names an allowed file itself
+      // A search is allowed inside an allowed folder or file, or, inside the project, when its glob names an allowed file
+      // itself or stays under plans/. The glob must be relative and never climb ("..").
       const pattern = tool === 'Glob' ? str('pattern') : str('glob')
-      const named = pattern !== '' && READ_FILES.includes(base(pattern))
-      const under = pattern !== '' && /^(?:\.\/)?plans\//i.test(slashes(pattern))
-      return (dir !== '' && mayRead(dir, ctx)) || named || under ? null : say(tool, dir || str('pattern') || str('glob'), 'scout')
+      const here = relativeGlob(pattern) && searchesProject(dir, ctx)
+      const g = slashes(pattern).trim().toLowerCase()
+      const named = here && READ_FILES.includes(g.split('/').pop() ?? '')
+      const inPlans = here && /^(?:\.\/)?plans\//.test(g)
+      return (dir !== '' && mayRead(dir, ctx)) || named || inPlans ? null : say(tool, dir || str('pattern') || str('glob'), 'scout')
     }
     case 'Write':
     case 'Edit':
     case 'MultiEdit': {
       const p = str('file_path')
-      return mayWrite(p) ? null : say(tool, p, 'coder')
+      return mayWrite(p, ctx) ? null : say(tool, p, 'coder')
     }
     case 'NotebookEdit':
       return say(tool, str('notebook_path'), 'coder')
